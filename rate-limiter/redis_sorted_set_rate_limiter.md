@@ -1,4 +1,3 @@
-
 # Redis Sorted Set Rate Limiter
 
 This document provides a detailed implementation of a **sliding window rate limiter** using **Redis Sorted Sets**, along with Python and Lua scripting examples, and a system architecture overview.
@@ -127,13 +126,58 @@ else:
 ---
 
 ## 🗃 Redis Key Example
-
 ```
 Key:    rate:user123
 Type:   Sorted Set
 Member: 1715891530.123-user123
 Score:  1715891530.123 (event time)
 ```
+
+---
+
+## 📊 Sorted Set Examples
+
+### Example 1: First Request
+
+When the first request from "user123" arrives:
+```
+127.0.0.1:6379> ZADD rate:user123 1672531199.123 "1672531199.123-user123"
+(integer) 1
+127.0.0.1:6379> EXPIRE rate:user123 60
+(integer) 1
+```
+
+- The sorted set `rate:user123` is created with the member `1672531199.123-user123`.
+- The score is set to the current timestamp.
+- The key is given a TTL of 60 seconds.
+
+### Example 2: Within Limit
+
+If "user123" makes 50 requests within the limit:
+```
+127.0.0.1:6379> ZADD rate:user123 1672531200.456 "1672531200.456-user123"
+(integer) 1
+127.0.0.1:6379> ZADD rate:user123 1672531201.789 "1672531201.789-user123"
+(integer) 1
+...
+127.0.0.1:6379> ZCARD rate:user123
+(integer) 50
+```
+
+- Each request adds a new member with the current timestamp.
+- The total count remains under the limit.
+
+### Example 3: Exceeding Limit
+
+If "user123" exceeds 100 requests:
+```
+127.0.0.1:6379> ZADD rate:user123 1672531259.321 "1672531259.321-user123"
+(integer) 1
+127.0.0.1:6379> ZCARD rate:user123
+(integer) 101
+```
+
+- Once the count exceeds 100, the rate limiter will block further requests until the window resets.
 
 ---
 
