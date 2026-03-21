@@ -481,3 +481,362 @@ Then open **http://127.0.0.1:8000/docs** — FastAPI auto-generates interactive 
 | `GET` | **R**ead | `/todos/{id}` | Get one todo |
 | `PUT` | **U**pdate | `/todos/{id}` | Update a todo |
 | `DELETE` | **D**elete | `/todos/{id}` | Delete a todo |
+
+---
+---
+
+# Part 2: Advanced FastAPI Concepts
+
+Now that you have a working CRUD app, let's level up.
+
+---
+
+## Phase 8: `async def` vs `def` — How FastAPI Handles Concurrency
+
+### The big picture
+
+FastAPI runs on **uvicorn**, which uses an **async event loop** (like Node.js). Here's how it handles your route functions:
+
+```
+┌─────────────────────────────────────────────────┐
+│              uvicorn (async event loop)          │
+│                                                  │
+│  async def route() ← runs directly on the loop  │
+│        def route() ← runs in a thread pool       │
+│                                                  │
+└─────────────────────────────────────────────────┘
+```
+
+| You write | FastAPI does | Good for |
+|-----------|-------------|----------|
+| `def endpoint()` | Runs it in a **thread pool** (won't block the loop) | Blocking I/O: SQLAlchemy, file reads, `requests` library |
+| `async def endpoint()` | Runs it **directly on the event loop** | Non-blocking I/O: `httpx.AsyncClient`, `aiofiles`, async DB drivers |
+
+### Rule of thumb
+- If you call **anything that blocks** (SQLAlchemy `db.query()`, `time.sleep()`, `open()`), use `def`
+- If you call **only async things** (`await`), use `async def`
+- If you use `async def` but call blocking code inside → **you freeze the entire server**
+
+### File: `app/main.py` — Add these new endpoints to see the difference
+
+```python
+import time
+import asyncio
+
+# BAD — blocks the event loop for 3 seconds. ALL other requests wait.
+@app.get("/slow-bad")
+async def slow_bad():
+    time.sleep(3)  # ← blocking call inside async = disaster
+    return {"message": "This blocked everything"}
+
+# GOOD — runs in thread pool, other requests keep flowing
+@app.get("/slow-sync")
+def slow_sync():
+    time.sleep(3)  # ← blocking, but FastAPI auto-runs this in a thread
+    return {"message": "This didn't block other requests"}
+
+# GOOD — async sleep yields control, other requests keep flowing
+@app.get("/slow-async")
+async def slow_async():
+    await asyncio.sleep(3)  # ← non-blocking
+    return {"message": "This didn't block other requests either"}
+```
+
+### Try it yourself — the concurrency test
+
+Open **3 terminal tabs** and run these at the same time:
+
+```bash
+# Tab 1: start server
+uvicorn app.main:app --reload
+
+# Tab 2: hit the endpoint
+time curl http://127.0.0.1:8000/slow-sync
+
+# Tab 3: hit a fast endpoint AT THE SAME TIME as tab 2
+time curl http://127.0.0.1:8000/todos
+```
+
+With `/slow-sync` (def): Tab 3 returns instantly — the slow request runs in a thread.
+Now try `/slow-bad` (async def + time.sleep): Tab 3 **also waits 3 seconds** — the event loop is frozen.
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| Event loop | Single thread that handles all async work — if you block it, everything stops |
+| Thread pool | FastAPI automatically runs `def` routes here (default pool size: 40 threads) |
+| `await` | Yields control back to the event loop so other requests can be served |
+| Golden rule | Never put blocking code inside `async def` |
+
+---
+
+## Phase 9: Background Tasks
+
+Sometimes you need to do work **after** returning a response — sending emails, writing logs, processing uploads.
+
+### File: `app/main.py` — Add background task endpoint
+
+```python
+from fastapi import BackgroundTasks
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def send_notification(todo_title: str):
+    """Simulate sending a notification (runs after response is sent)."""
+    time.sleep(2)  # simulate slow email/webhook
+    logger.info(f"Notification sent for: {todo_title}")
+
+@app.post("/todos-notify", response_model=TodoResponse, status_code=201)
+def create_todo_with_notification(
+    todo: TodoCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    new_todo = crud.create_todo(db, todo)
+    # This runs AFTER the response is sent — client doesn't wait
+    background_tasks.add_task(send_notification, new_todo.title)
+    return new_todo
+```
+
+### Try it yourself
+
+```bash
+# POST returns immediately, but check your server logs 2 seconds later
+curl -X POST http://127.0.0.1:8000/todos-notify \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Test notification"}'
+```
+
+You'll see the response instantly, then `Notification sent for: Test notification` in the server logs 2 seconds later.
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `BackgroundTasks` | FastAPI dependency — inject it like `get_db` |
+| `add_task(fn, *args)` | Queues a function to run after the response is sent |
+| Use `def` not `async def` | Background functions with blocking I/O should be regular `def` |
+| Not a job queue | For heavy work, use Celery/Redis. `BackgroundTasks` is for lightweight fire-and-forget |
+
+---
+
+## Phase 10: Middleware & Request Lifecycle
+
+Middleware wraps **every** request — useful for logging, timing, CORS, auth checks.
+
+### File: `app/main.py` — Add timing middleware
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+# CORS — allow your React frontend to call this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Custom middleware — logs how long each request takes
+@app.middleware("http")
+async def add_timing_header(request, call_next):
+    import time as _time
+    start = _time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (_time.perf_counter() - start) * 1000
+    response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+    logger.info(f"{request.method} {request.url.path} → {response.status_code} ({duration_ms:.1f}ms)")
+    return response
+```
+
+### Try it yourself
+
+```bash
+# Check the response headers — you'll see X-Process-Time-Ms
+curl -v http://127.0.0.1:8000/todos 2>&1 | grep X-Process
+```
+
+### How the request lifecycle flows:
+
+```
+Client request
+  → Middleware 1 (CORS)
+    → Middleware 2 (timing)
+      → Dependency injection (get_db)
+        → Route handler (create_todo)
+      → Dependency cleanup (db.close)
+    → Middleware 2 adds timing header
+  → Middleware 1 adds CORS headers
+Client response
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| Middleware | Wraps every request/response — runs before AND after your route |
+| `call_next(request)` | Passes request to the next middleware or route handler |
+| CORS middleware | Required when your frontend (React) is on a different port/domain |
+| Execution order | Middleware → Dependencies → Route → Dependencies cleanup → Middleware |
+
+---
+
+## Phase 11: Async Database with `aiosqlite`
+
+Your current setup uses synchronous SQLAlchemy — every `db.query()` blocks a thread. For high concurrency, you can go fully async.
+
+### Install
+
+```bash
+uv pip install aiosqlite
+```
+
+### File: `app/database_async.py` — Async database setup
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./app.db"
+
+async_engine = create_async_engine(
+    ASYNC_DATABASE_URL, connect_args={"check_same_thread": False}
+)
+AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_async_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+```
+
+### File: `app/crud_async.py` — Async CRUD
+
+```python
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.models import Todo
+from app.schemas import TodoCreate
+
+async def create_todo(db: AsyncSession, todo: TodoCreate) -> Todo:
+    db_todo = Todo(**todo.model_dump())
+    db.add(db_todo)
+    await db.commit()
+    await db.refresh(db_todo)
+    return db_todo
+
+async def get_todos(db: AsyncSession) -> list[Todo]:
+    result = await db.execute(select(Todo))
+    return list(result.scalars().all())
+
+async def get_todo(db: AsyncSession, todo_id: int) -> Todo | None:
+    result = await db.execute(select(Todo).where(Todo.id == todo_id))
+    return result.scalar_one_or_none()
+```
+
+### File: `app/main.py` — Async route example
+
+```python
+from app.database_async import get_async_db
+from app import crud_async
+from sqlalchemy.ext.asyncio import AsyncSession
+
+@app.get("/async/todos", response_model=list[TodoResponse])
+async def read_todos_async(db: AsyncSession = Depends(get_async_db)):
+    return await crud_async.get_todos(db)
+```
+
+### Sync vs Async comparison:
+
+| | Sync (current) | Async (new) |
+|---|---|---|
+| Engine | `create_engine` | `create_async_engine` |
+| Session | `Session` | `AsyncSession` |
+| Query | `db.query(Todo).all()` | `await db.execute(select(Todo))` |
+| Route | `def` | `async def` |
+| DB driver | `sqlite3` (built-in) | `aiosqlite` (installed separately) |
+| When to use | Simple apps, low traffic | High concurrency, many simultaneous users |
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `select(Todo)` | SQLAlchemy 2.0 style query — works for both sync and async |
+| `result.scalars().all()` | Extracts model objects from the raw result |
+| `expire_on_commit=False` | Prevents lazy-load errors after commit in async context |
+| `async with` session | Auto-closes session when done — cleaner than try/finally |
+
+---
+
+## Phase 12: Concurrent External API Calls
+
+Real apps often call multiple external services. With `async`, you can call them **in parallel**.
+
+### Install
+
+```bash
+uv pip install httpx
+```
+
+### File: `app/main.py` — Parallel vs sequential external calls
+
+```python
+import httpx
+
+# SLOW — sequential: 2 API calls × ~200ms each = ~400ms total
+@app.get("/external/sequential")
+async def fetch_sequential():
+    async with httpx.AsyncClient() as client:
+        resp1 = await client.get("https://httpbin.org/delay/1")
+        resp2 = await client.get("https://httpbin.org/delay/1")
+    return {"total_calls": 2, "note": "took ~2 seconds (sequential)"}
+
+# FAST — parallel: 2 API calls at once = ~200ms total
+@app.get("/external/parallel")
+async def fetch_parallel():
+    async with httpx.AsyncClient() as client:
+        resp1, resp2 = await asyncio.gather(
+            client.get("https://httpbin.org/delay/1"),
+            client.get("https://httpbin.org/delay/1"),
+        )
+    return {"total_calls": 2, "note": "took ~1 second (parallel)"}
+```
+
+### Try it yourself
+
+```bash
+# Compare the two — notice the time difference
+time curl http://127.0.0.1:8000/external/sequential
+time curl http://127.0.0.1:8000/external/parallel
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `httpx.AsyncClient` | Async HTTP client (replaces `requests` in async code) |
+| `asyncio.gather()` | Runs multiple coroutines **concurrently** — returns when ALL complete |
+| Why async matters | 10 parallel API calls take the same time as 1 — huge performance win |
+
+---
+
+## Cheat Sheet: When to Use What
+
+```
+Is my code blocking? (db.query, time.sleep, open(), requests.get)
+  ├─ YES → use `def` (FastAPI auto-threads it)
+  └─ NO  → use `async def` + `await`
+
+Do I need work done after the response?
+  ├─ Lightweight → BackgroundTasks
+  └─ Heavy/reliable → Celery + Redis (separate topic)
+
+Am I calling multiple external APIs?
+  ├─ YES → asyncio.gather() for parallel calls
+  └─ NO  → simple await is fine
+
+Do I need to run code on every request?
+  └─ YES → Middleware
+```
