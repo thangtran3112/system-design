@@ -1,38 +1,64 @@
-import { useState } from "react";
 import TodoForm from "./components/TodoForm";
 import TodoList from "./components/TodoList";
-
-const FAKE_TODOS = [
-  {
-    id: 1,
-    title: "Learn React",
-    description: "Components and JSX",
-    completed: false,
-  },
-  {
-    id: 2,
-    title: "Learn FastAPI",
-    description: "Already done!",
-    completed: true,
-  },
-];
+import useTodos from "./hooks/useTodos";
+import TodoFilters from "./components/TodoFilters";
+import { useMemo, useState } from "react";
 
 function App() {
-  const [todos, setTodos] = useState([]);
-  const handleDelete = (id) => {
-    setTodos(todos.filter((todo) => todo.id !== id));
-  };
+  const { todos, isLoading, error, addTodo, updateTodo, deleteTodo } =
+    useTodos();
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("id");
 
-  const handleAdd = (newTodo) => {
-    const todo = { ...newTodo, id: Date.now(), completed: false };
-    setTodos([...todos, todo]);
-  };
+  const filteredTodos = useMemo(() => {
+    let result = todos;
+
+    // Filter by search text
+    if (search) {
+      result = result.filter((t) =>
+        t.title.toLowerCase().includes(search.toLowerCase()),
+      );
+    }
+
+    // Filter by status
+    if (filter === "active") {
+      result = result.filter((t) => !t.completed);
+    } else if (filter === "completed") {
+      result = result.filter((t) => t.completed);
+    }
+
+    // Sort
+    if (sortBy === "title") {
+      result = [...result].sort((a, b) => a.title.localeCompare(b.title));
+    }
+
+    return result;
+  }, [todos, search, filter, sortBy]);
+
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error}</p>;
 
   return (
     <div>
       <h1>Todo App</h1>
-      <TodoForm onAdd={handleAdd} />
-      <TodoList todos={todos} onDelete={handleDelete} />
+      <TodoForm onAdd={addTodo} />
+      <TodoFilters
+        search={search}
+        onSearchChange={setSearch}
+        filter={filter}
+        onFilterChange={setFilter}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+      />
+      <p>
+        {filteredTodos.length} of {todos.length} todos
+      </p>
+      <TodoList
+        todos={filteredTodos}
+        onDelete={deleteTodo}
+        onUpdate={updateTodo}
+      />
     </div>
   );
 }
