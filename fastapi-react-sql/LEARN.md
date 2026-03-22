@@ -840,3 +840,912 @@ Am I calling multiple external APIs?
 Do I need to run code on every request?
   └─ YES → Middleware
 ```
+
+---
+---
+
+# Part 3: React Fundamentals — Todo Frontend
+
+Build a React frontend for the Todo API. No external UI libraries — just React + native HTML elements.
+
+---
+
+## Phase 8: React Project Setup
+
+```bash
+cd /Users/ttran/personal/system-design/fastapi-react-sql
+npx create-react-app frontend
+cd frontend
+npm start
+```
+
+Then clean up the boilerplate. Replace `src/App.js` with:
+
+```jsx
+function App() {
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <p>React is working!</p>
+    </div>
+  );
+}
+
+export default App;
+```
+
+Clear out `src/App.css` (delete all contents, keep the file).
+
+---
+
+## Phase 9: Component Basics & JSX
+
+**Concepts:** functional components, props, rendering lists with `key`
+
+### Create `src/components/TodoItem.jsx`
+
+```jsx
+function TodoItem({ id, title, description, completed, onDelete }) {
+  return (
+    <li>
+      <span style={{ textDecoration: completed ? "line-through" : "none" }}>
+        <strong>{title}</strong>
+        {description && <> — {description}</>}
+      </span>
+      <button type="button" onClick={() => onDelete(id)}>Delete</button>
+    </li>
+  );
+}
+
+export default TodoItem;
+```
+
+### Create `src/components/TodoList.jsx`
+
+```jsx
+import TodoItem from "./TodoItem";
+
+function TodoList({ todos, onDelete }) {
+  if (todos.length === 0) {
+    return <p>No todos yet. Add one above!</p>;
+  }
+
+  return (
+    <ul>
+      {todos.map((todo) => (
+        <TodoItem
+          key={todo.id}
+          id={todo.id}
+          title={todo.title}
+          description={todo.description}
+          completed={todo.completed}
+          onDelete={onDelete}
+        />
+      ))}
+    </ul>
+  );
+}
+
+export default TodoList;
+```
+
+### Update `src/App.js` — use hardcoded data for now
+
+```jsx
+import TodoList from "./components/TodoList";
+
+const FAKE_TODOS = [
+  { id: 1, title: "Learn React", description: "Components and JSX", completed: false },
+  { id: 2, title: "Learn FastAPI", description: "Already done!", completed: true },
+];
+
+function App() {
+  const handleDelete = (id) => {
+    console.log("Delete todo:", id);
+  };
+
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <TodoList todos={FAKE_TODOS} onDelete={handleDelete} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### What you just learned
+
+| Concept | Example |
+|---------|---------|
+| Functional component | `function TodoItem({ title }) { return <li>{title}</li> }` |
+| Props destructuring | `{ id, title, completed }` in the function signature |
+| `key` prop | `key={todo.id}` — React uses this to track which items changed |
+| `.map()` for lists | `todos.map(todo => <TodoItem ... />)` |
+| Conditional rendering | `{description && <> — {description}</>}` |
+| Fragment shorthand | `<>...</>` — wraps multiple elements without adding a DOM node |
+| Callback prop | `onDelete={handleDelete}` — parent passes function, child calls it |
+
+---
+
+## Phase 10: State & Events — `useState`
+
+**Concepts:** useState, controlled components, form submission
+
+### Create `src/components/TodoForm.jsx`
+
+```jsx
+import { useState } from "react";
+
+function TodoForm({ onAdd }) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+
+    if (!title.trim()) return;
+
+    onAdd({ title: title.trim(), description: description.trim() });
+    setTitle("");
+    setDescription("");
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div>
+        <label htmlFor="title">Title</label>
+        <input
+          id="title"
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="What needs to be done?"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="description">Description</label>
+        <textarea
+          id="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Optional details..."
+          rows={3}
+        />
+      </div>
+
+      <button type="submit">Add Todo</button>
+    </form>
+  );
+}
+
+export default TodoForm;
+```
+
+### Update `src/App.js` — add form with local state
+
+```jsx
+import { useState } from "react";
+import TodoList from "./components/TodoList";
+import TodoForm from "./components/TodoForm";
+
+function App() {
+  const [todos, setTodos] = useState([]);
+
+  const handleAdd = (newTodo) => {
+    const todo = { ...newTodo, id: Date.now(), completed: false };
+    setTodos([...todos, todo]);
+  };
+
+  const handleDelete = (id) => {
+    setTodos(todos.filter((todo) => todo.id !== id));
+  };
+
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <TodoForm onAdd={handleAdd} />
+      <TodoList todos={todos} onDelete={handleDelete} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| `useState("")` | Declares state variable + setter. Re-renders component when set. |
+| Controlled component | `<input value={title} onChange={...} />` — React owns the value, not the DOM |
+| `e.preventDefault()` | Stops the browser from reloading the page on form submit |
+| `htmlFor` | JSX version of HTML's `for` attribute (links label to input) |
+| `<textarea>` in React | Uses `value` prop, not children like in HTML |
+| Immutable update | `[...todos, newTodo]` — create new array, never mutate state directly |
+| `filter` for delete | `todos.filter(t => t.id !== id)` — returns new array without the deleted item |
+
+### HTML elements reviewed
+
+| Element | Key attributes |
+|---------|---------------|
+| `<form>` | `onSubmit` |
+| `<input type="text">` | `value`, `onChange`, `placeholder`, `id` |
+| `<textarea>` | `value`, `onChange`, `rows`, `placeholder` |
+| `<label>` | `htmlFor` — matches input's `id` for accessibility |
+| `<button type="submit">` | Inside a `<form>`, triggers `onSubmit` |
+| `<button type="button">` | Does NOT trigger form submit — use for non-form actions |
+
+---
+
+## Phase 11: Side Effects — `useEffect` & API Calls
+
+**Concepts:** useEffect, fetch, loading/error states, dependency array
+
+### Update `src/App.js` — wire up to real backend
+
+```jsx
+import { useState, useEffect } from "react";
+import TodoList from "./components/TodoList";
+import TodoForm from "./components/TodoForm";
+
+const API = "http://127.0.0.1:8000";
+
+function App() {
+  const [todos, setTodos] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch todos on mount
+  useEffect(() => {
+    async function fetchTodos() {
+      try {
+        const res = await fetch(`${API}/todos`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setTodos(data);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    fetchTodos();
+  }, []); // ← empty array = run once on mount
+
+  const handleAdd = async (newTodo) => {
+    try {
+      const res = await fetch(`${API}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newTodo),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = await res.json();
+      setTodos([...todos, created]);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      const res = await fetch(`${API}/todos/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setTodos(todos.filter((t) => t.id !== id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error}</p>;
+
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <TodoForm onAdd={handleAdd} />
+      <TodoList todos={todos} onDelete={handleDelete} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| `useEffect(fn, [])` | Empty deps = run once after first render (like componentDidMount) |
+| `useEffect(fn, [x])` | Runs when `x` changes |
+| `useEffect(fn)` | No deps = runs after EVERY render (usually a bug) |
+| Why async inside | `useEffect` callback can't be async itself — define async function inside and call it |
+| Loading pattern | `isLoading` starts true, set false in `finally` |
+| Error pattern | `try/catch` around fetch, store error in state |
+| `res.ok` | `fetch` doesn't throw on 404/500 — you must check `res.ok` yourself |
+| `Content-Type` header | Required for POST/PUT so the server knows you're sending JSON |
+
+### useEffect dependency array cheat sheet
+
+```
+useEffect(() => { ... }, [])      // Mount only — fetch initial data
+useEffect(() => { ... }, [id])    // When id changes — fetch single item
+useEffect(() => { ... })          // Every render — usually wrong
+useEffect(() => {
+  return () => { ... }            // Cleanup — runs before next effect or unmount
+}, [])
+```
+
+---
+
+## Phase 12: Editing & More Form Elements
+
+**Concepts:** inline editing, toggling state, `<select>`, `<checkbox>`, more input types
+
+### Update `src/components/TodoItem.jsx` — add edit mode
+
+```jsx
+import { useState } from "react";
+
+function TodoItem({ id, title, description, completed, onUpdate, onDelete }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(title);
+  const [editDescription, setEditDescription] = useState(description);
+  const [editCompleted, setEditCompleted] = useState(completed);
+
+  const handleSave = () => {
+    onUpdate(id, {
+      title: editTitle,
+      description: editDescription,
+      completed: editCompleted,
+    });
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditTitle(title);
+    setEditDescription(description);
+    setEditCompleted(completed);
+    setIsEditing(false);
+  };
+
+  if (isEditing) {
+    return (
+      <li>
+        <div>
+          <label htmlFor={`title-${id}`}>Title</label>
+          <input
+            id={`title-${id}`}
+            type="text"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label htmlFor={`desc-${id}`}>Description</label>
+          <textarea
+            id={`desc-${id}`}
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label htmlFor={`status-${id}`}>Status</label>
+          <select
+            id={`status-${id}`}
+            value={editCompleted ? "completed" : "active"}
+            onChange={(e) => setEditCompleted(e.target.value === "completed")}
+          >
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+
+        <div>
+          <label>
+            <input
+              type="checkbox"
+              checked={editCompleted}
+              onChange={(e) => setEditCompleted(e.target.checked)}
+            />
+            Mark completed
+          </label>
+        </div>
+
+        <button type="button" onClick={handleSave}>Save</button>
+        <button type="button" onClick={handleCancel}>Cancel</button>
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <span style={{ textDecoration: completed ? "line-through" : "none" }}>
+        <strong>{title}</strong>
+        {description && <> — {description}</>}
+        {completed ? " ✓" : ""}
+      </span>
+      <button type="button" onClick={() => setIsEditing(true)}>Edit</button>
+      <button type="button" onClick={() => onDelete(id)}>Delete</button>
+    </li>
+  );
+}
+
+export default TodoItem;
+```
+
+### Update `src/App.js` — add handleUpdate
+
+Add this function in App alongside handleAdd and handleDelete:
+
+```jsx
+const handleUpdate = async (id, updates) => {
+  try {
+    const res = await fetch(`${API}/todos/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const updated = await res.json();
+    setTodos(todos.map((t) => (t.id === id ? updated : t)));
+  } catch (err) {
+    setError(err.message);
+  }
+};
+```
+
+And pass it down:
+
+```jsx
+<TodoList todos={todos} onUpdate={handleUpdate} onDelete={handleDelete} />
+```
+
+Update TodoList to pass `onUpdate` through to each TodoItem.
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| Boolean state toggle | `isEditing` flips between view and edit mode |
+| `<select>` + `<option>` | Dropdown — `value` on select, not `selected` on option (React way) |
+| `<input type="checkbox">` | Uses `checked` not `value`, and `e.target.checked` not `e.target.value` |
+| Cancel = reset state | Copy original props back into edit state variables |
+| `map` for update | `todos.map(t => t.id === id ? updated : t)` — replace one item in array |
+
+### HTML elements reviewed
+
+| Element | React gotcha |
+|---------|-------------|
+| `<select value={x}>` | Controlled via `value` on `<select>`, not `selected` on `<option>` |
+| `<option value="x">` | Value is what JS sees, text content is what user sees |
+| `<input type="checkbox">` | `checked` + `onChange`, NOT `value` |
+| `<input type="number">` | `value` is still a string — use `parseInt(e.target.value)` |
+| `<input type="date">` | Value format is `"YYYY-MM-DD"` string |
+
+---
+
+## Phase 13: `useRef` & DOM Access
+
+**Concepts:** useRef, focus management, uncontrolled inputs
+
+### Update `src/components/TodoForm.jsx` — auto-focus
+
+```jsx
+import { useState, useRef, useEffect } from "react";
+
+function TodoForm({ onAdd }) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const titleInputRef = useRef(null);
+
+  // Auto-focus the title input on mount
+  useEffect(() => {
+    titleInputRef.current.focus();
+  }, []);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    onAdd({ title: title.trim(), description: description.trim() });
+    setTitle("");
+    setDescription("");
+    titleInputRef.current.focus(); // re-focus after submit
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div>
+        <label htmlFor="title">Title</label>
+        <input
+          ref={titleInputRef}
+          id="title"
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="What needs to be done?"
+        />
+      </div>
+      <div>
+        <label htmlFor="description">Description</label>
+        <textarea
+          id="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Optional details..."
+          rows={3}
+        />
+      </div>
+      <button type="submit">Add Todo</button>
+    </form>
+  );
+}
+
+export default TodoForm;
+```
+
+### Bonus: uncontrolled form example (for comparison)
+
+```jsx
+import { useRef } from "react";
+
+function UncontrolledForm({ onAdd }) {
+  const titleRef = useRef(null);
+  const descRef = useRef(null);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onAdd({
+      title: titleRef.current.value,
+      description: descRef.current.value,
+    });
+    e.target.reset(); // reset the form DOM directly
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input ref={titleRef} type="text" placeholder="Title" />
+      <textarea ref={descRef} placeholder="Description" />
+      <button type="submit">Add</button>
+    </form>
+  );
+}
+```
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| `useRef(null)` | Creates a mutable ref object — `.current` holds the value |
+| `ref={titleInputRef}` | Attaches ref to a DOM element |
+| `.current.focus()` | Direct DOM manipulation — call methods on the element |
+| Ref vs state | Changing a ref does NOT cause a re-render |
+| Controlled | React state = source of truth. `value={state}` |
+| Uncontrolled | DOM = source of truth. Read via `ref.current.value` |
+| When to use ref | Focus, scroll, measure, integrate with non-React code |
+
+---
+
+## Phase 14: Custom Hooks
+
+**Concepts:** extract reusable logic, hook composition
+
+### Create `src/hooks/useTodos.js`
+
+```jsx
+import { useState, useEffect } from "react";
+
+const API = "http://127.0.0.1:8000";
+
+function useTodos() {
+  const [todos, setTodos] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    async function fetchTodos() {
+      try {
+        const res = await fetch(`${API}/todos`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setTodos(await res.json());
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchTodos();
+  }, []);
+
+  const addTodo = async (newTodo) => {
+    const res = await fetch(`${API}/todos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newTodo),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const created = await res.json();
+    setTodos((prev) => [...prev, created]);
+    return created;
+  };
+
+  const updateTodo = async (id, updates) => {
+    const res = await fetch(`${API}/todos/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const updated = await res.json();
+    setTodos((prev) => prev.map((t) => (t.id === id ? updated : t)));
+    return updated;
+  };
+
+  const deleteTodo = async (id) => {
+    const res = await fetch(`${API}/todos/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setTodos((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  return { todos, isLoading, error, addTodo, updateTodo, deleteTodo };
+}
+
+export default useTodos;
+```
+
+### Create `src/hooks/useForm.js`
+
+```jsx
+import { useState } from "react";
+
+function useForm(initialValues) {
+  const [values, setValues] = useState(initialValues);
+
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setValues((prev) => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : value,
+    }));
+  };
+
+  const reset = () => setValues(initialValues);
+
+  return { values, handleChange, reset, setValues };
+}
+
+export default useForm;
+```
+
+### Simplified `src/App.js` — using custom hooks
+
+```jsx
+import useTodos from "./hooks/useTodos";
+import TodoList from "./components/TodoList";
+import TodoForm from "./components/TodoForm";
+
+function App() {
+  const { todos, isLoading, error, addTodo, updateTodo, deleteTodo } = useTodos();
+
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error}</p>;
+
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <TodoForm onAdd={addTodo} />
+      <TodoList todos={todos} onUpdate={updateTodo} onDelete={deleteTodo} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| Custom hook | Just a function that calls other hooks — must start with `use` |
+| `useTodos()` | Encapsulates ALL API + state logic. Component just consumes return values. |
+| `useForm()` | Generic — works for any form. Uses `name` attribute to map inputs to state. |
+| `setTodos(prev => ...)` | Functional update — safer when state depends on previous value |
+| `[name]: value` | Computed property name — dynamic key based on input's `name` attribute |
+| Hook rules | Only call hooks at top level (not inside if/loops). Only call in React functions. |
+
+---
+
+## Phase 15: Filtering, Searching & Derived State
+
+**Concepts:** derived state, useMemo, radio buttons, search
+
+### Create `src/components/TodoFilters.jsx`
+
+```jsx
+function TodoFilters({ search, onSearchChange, filter, onFilterChange, sortBy, onSortChange }) {
+  return (
+    <div>
+      <div>
+        <label htmlFor="search">Search</label>
+        <input
+          id="search"
+          type="search"
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Filter by title..."
+        />
+      </div>
+
+      <div>
+        <label htmlFor="filter-status">Status</label>
+        <select
+          id="filter-status"
+          value={filter}
+          onChange={(e) => onFilterChange(e.target.value)}
+        >
+          <option value="all">All</option>
+          <option value="active">Active</option>
+          <option value="completed">Completed</option>
+        </select>
+      </div>
+
+      <fieldset>
+        <legend>Sort by</legend>
+        <label>
+          <input
+            type="radio"
+            name="sortBy"
+            value="title"
+            checked={sortBy === "title"}
+            onChange={(e) => onSortChange(e.target.value)}
+          />
+          Title
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="sortBy"
+            value="id"
+            checked={sortBy === "id"}
+            onChange={(e) => onSortChange(e.target.value)}
+          />
+          Date added
+        </label>
+      </fieldset>
+    </div>
+  );
+}
+
+export default TodoFilters;
+```
+
+### Update `src/App.js` — derived state with useMemo
+
+```jsx
+import { useState, useMemo } from "react";
+import useTodos from "./hooks/useTodos";
+import TodoList from "./components/TodoList";
+import TodoForm from "./components/TodoForm";
+import TodoFilters from "./components/TodoFilters";
+
+function App() {
+  const { todos, isLoading, error, addTodo, updateTodo, deleteTodo } = useTodos();
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("id");
+
+  // Derived state — computed from todos + filter settings
+  // useMemo avoids recalculating on every render (only when dependencies change)
+  const filteredTodos = useMemo(() => {
+    let result = todos;
+
+    // Filter by search text
+    if (search) {
+      result = result.filter((t) =>
+        t.title.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    // Filter by status
+    if (filter === "active") {
+      result = result.filter((t) => !t.completed);
+    } else if (filter === "completed") {
+      result = result.filter((t) => t.completed);
+    }
+
+    // Sort
+    if (sortBy === "title") {
+      result = [...result].sort((a, b) => a.title.localeCompare(b.title));
+    }
+
+    return result;
+  }, [todos, search, filter, sortBy]);
+
+  if (isLoading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error}</p>;
+
+  return (
+    <div>
+      <h1>Todo App</h1>
+      <TodoForm onAdd={addTodo} />
+      <TodoFilters
+        search={search}
+        onSearchChange={setSearch}
+        filter={filter}
+        onFilterChange={setFilter}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+      />
+      <p>{filteredTodos.length} of {todos.length} todos</p>
+      <TodoList todos={filteredTodos} onUpdate={updateTodo} onDelete={deleteTodo} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### What you just learned
+
+| Concept | Detail |
+|---------|--------|
+| Derived state | `filteredTodos` is computed from `todos` + filters — NOT stored in useState |
+| `useMemo(fn, [deps])` | Caches the result — only recalculates when dependencies change |
+| Anti-pattern | `useEffect` to sync filtered list into state — just compute it directly |
+| `<input type="search">` | Same as text but has a clear button in some browsers |
+| `<input type="radio">` | Group with same `name`. `checked` = controlled, `onChange` to update. |
+| `<fieldset>` + `<legend>` | Groups related inputs — important for accessibility |
+| `[...result].sort()` | Copy before sort — `.sort()` mutates the array in place |
+
+### Common anti-patterns to avoid
+
+```jsx
+// BAD — storing derived state
+const [filteredTodos, setFilteredTodos] = useState([]);
+useEffect(() => {
+  setFilteredTodos(todos.filter(...));
+}, [todos, filter]);
+
+// GOOD — compute it directly
+const filteredTodos = useMemo(() => todos.filter(...), [todos, filter]);
+
+// ALSO FINE for cheap computations — no useMemo needed
+const filteredTodos = todos.filter(...);
+```
+
+---
+
+## React Quick Reference
+
+### Hooks learned
+
+| Hook | Purpose |
+|------|---------|
+| `useState` | Component state — triggers re-render on change |
+| `useEffect` | Side effects — fetch data, subscriptions, DOM mutations |
+| `useRef` | Mutable value that persists across renders without re-rendering |
+| `useMemo` | Cache expensive computations — recalculates only when deps change |
+
+### HTML elements reviewed
+
+| Element | Key React attributes |
+|---------|---------------------|
+| `<input type="text">` | `value`, `onChange` |
+| `<input type="checkbox">` | `checked`, `onChange` (use `e.target.checked`) |
+| `<input type="search">` | `value`, `onChange` |
+| `<input type="radio">` | `name`, `value`, `checked`, `onChange` |
+| `<input type="number">` | `value`, `onChange` (value is string, parse it) |
+| `<input type="date">` | `value` (YYYY-MM-DD string), `onChange` |
+| `<textarea>` | `value`, `onChange` (not children) |
+| `<select>` + `<option>` | `value` on select (not `selected` on option) |
+| `<form>` | `onSubmit` (always `e.preventDefault()`) |
+| `<label>` | `htmlFor` (not `for`) |
+| `<fieldset>` + `<legend>` | Group related inputs |
+| `<button type="submit">` | Triggers form submit |
+| `<button type="button">` | Does NOT trigger form submit |
