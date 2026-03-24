@@ -1,6 +1,6 @@
 import strawberry
 from typing import Optional
-from app.database import SessionLocal
+from app import database as db_module
 from app.models import Todo, User
 from app.schemas import TodoType, UserType, CreateTodoInput, UpdateTodoInput
 
@@ -25,7 +25,7 @@ class Query:
     @strawberry.field
     def todos(self, owner_id: Optional[int] = None) -> list[TodoType]:
         """Fetch all todos, optionally filtered by owner."""
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             query = db.query(Todo)
             if owner_id is not None:
@@ -37,7 +37,7 @@ class Query:
     @strawberry.field
     def todo(self, id: int) -> Optional[TodoType]:
         """Fetch a single todo by ID."""
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             todo = db.query(Todo).filter(Todo.id == id).first()
             return db_todo_to_type(todo) if todo else None
@@ -46,7 +46,7 @@ class Query:
 
     @strawberry.field
     def users(self) -> list[UserType]:
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             return [
                 UserType(
@@ -62,7 +62,7 @@ class Query:
 class Mutation:
     @strawberry.mutation
     def create_todo(self, input: CreateTodoInput, owner_id: int) -> TodoType:
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             todo = Todo(
                 title=input.title,
@@ -78,7 +78,7 @@ class Mutation:
 
     @strawberry.mutation
     def update_todo(self, id: int, input: UpdateTodoInput) -> Optional[TodoType]:
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             todo = db.query(Todo).filter(Todo.id == id).first()
             if not todo:
@@ -97,7 +97,7 @@ class Mutation:
 
     @strawberry.mutation
     def delete_todo(self, id: int) -> bool:
-        db = SessionLocal()
+        db = db_module.SessionLocal()
         try:
             todo = db.query(Todo).filter(Todo.id == id).first()
             if not todo:
