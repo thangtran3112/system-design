@@ -842,6 +842,464 @@ Do I need to run code on every request?
 ```
 
 ---
+
+## Phase 13: Rate Limiting & Throttling
+
+Protect your API from abuse. No external library needed — use a simple in-memory approach first, then understand production options.
+
+### File: `app/rate_limit.py`
+
+```python
+import time
+from collections import defaultdict
+from fastapi import HTTPException, Request
+
+# Simple sliding window rate limiter
+class RateLimiter:
+    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, client_ip: str):
+        now = time.time()
+        # Remove expired timestamps
+        self.requests[client_ip] = [
+            t for t in self.requests[client_ip]
+            if now - t < self.window_seconds
+        ]
+        if len(self.requests[client_ip]) >= self.max_requests:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Try again later.",
+            )
+        self.requests[client_ip].append(now)
+
+limiter = RateLimiter(max_requests=5, window_seconds=10)
+```
+
+### File: `app/main.py` — Use it as a dependency
+
+```python
+from app.rate_limit import limiter
+
+async def rate_limit_dep(request: Request):
+    limiter.check(request.client.host)
+
+# Apply to a single route
+@app.get("/todos", dependencies=[Depends(rate_limit_dep)])
+async def read_todos(db: Session = Depends(get_db)):
+    ...
+
+# OR apply to the whole app
+# app = FastAPI(dependencies=[Depends(rate_limit_dep)])
+```
+
+### Try it yourself
+
+```bash
+# Hit it 6 times fast — the 6th should return 429
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/todos
+done
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| Sliding window | Track timestamps, remove expired ones, count remaining |
+| `dependencies=[Depends()]` | Apply a dependency to a route without injecting a return value |
+| 429 status code | Standard HTTP code for "Too Many Requests" |
+| In-memory limitation | This resets on restart and doesn't work across multiple workers — production uses Redis |
+
+> **Production approach:** Use `slowapi` or Redis-backed rate limiting (token bucket / sliding window in Redis) when running multiple Uvicorn workers.
+
+---
+
+## Phase 14: Dependency Injection Deep Dive
+
+FastAPI's `Depends()` is its most powerful feature. You've used it for `get_db` — now learn the full pattern.
+
+### File: `app/dependencies.py`
+
+```python
+from fastapi import Depends, Header, HTTPException, Query
+
+# 1. Simple dependency — returns a value
+async def common_parameters(skip: int = 0, limit: int = Query(default=100, le=1000)):
+    return {"skip": skip, "limit": limit}
+
+# 2. Dependency that raises — acts as a guard
+async def verify_api_key(x_api_key: str = Header()):
+    if x_api_key != "secret-key-123":
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+# 3. Dependency with sub-dependencies (chaining)
+async def get_current_user(x_api_key: str = Header()):
+    # In real apps: decode JWT, look up user in DB
+    if x_api_key == "admin-key":
+        return {"user": "admin", "role": "admin"}
+    elif x_api_key == "user-key":
+        return {"user": "viewer", "role": "viewer"}
+    raise HTTPException(status_code=401, detail="Unknown key")
+
+async def require_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin required")
+    return current_user
+```
+
+### File: `app/main.py` — Using dependencies
+
+```python
+from app.dependencies import common_parameters, verify_api_key, require_admin
+
+# Pagination via shared dependency
+@app.get("/todos")
+async def read_todos(
+    commons: dict = Depends(common_parameters),
+    db: Session = Depends(get_db),
+):
+    return db.query(Todo).offset(commons["skip"]).limit(commons["limit"]).all()
+
+# Guard — no return value needed, just blocks if invalid
+@app.delete("/todos/{todo_id}", dependencies=[Depends(verify_api_key)])
+async def delete_todo(todo_id: int, db: Session = Depends(get_db)):
+    ...
+
+# Chained — require_admin calls get_current_user automatically
+@app.post("/admin/reset", dependencies=[Depends(require_admin)])
+async def admin_reset():
+    return {"message": "Admin action performed"}
+```
+
+### Try it yourself
+
+```bash
+# Without API key — 422 (missing header)
+curl http://127.0.0.1:8000/admin/reset -X POST
+
+# Wrong key — 403
+curl -H "x-api-key: wrong" http://127.0.0.1:8000/admin/reset -X POST
+
+# User key — 403 (not admin)
+curl -H "x-api-key: user-key" http://127.0.0.1:8000/admin/reset -X POST
+
+# Admin key — 200
+curl -H "x-api-key: admin-key" http://127.0.0.1:8000/admin/reset -X POST
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `Depends()` return value | Injected into the route parameter |
+| `dependencies=[Depends()]` | Run the dependency but discard return value (guards) |
+| Sub-dependencies | Dependencies can depend on other dependencies — FastAPI resolves the chain |
+| `Header()` | Extract values from HTTP headers |
+| `Query(le=1000)` | Validation on query parameters |
+
+---
+
+## Phase 15: Caching Responses
+
+Avoid redundant work — cache expensive queries. Start simple, then understand the production path.
+
+### File: `app/cache.py`
+
+```python
+import time
+from functools import wraps
+
+# Simple in-memory TTL cache
+_cache: dict[str, tuple[float, any]] = {}
+
+def cached(ttl_seconds: int = 30):
+    """Decorator that caches a function's return value by its arguments."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Build a cache key from function name + args
+            key = f"{func.__name__}:{args}:{kwargs}"
+            now = time.time()
+
+            if key in _cache:
+                expires_at, value = _cache[key]
+                if now < expires_at:
+                    return value  # Cache HIT
+
+            # Cache MISS — call the actual function
+            result = await func(*args, **kwargs)
+            _cache[key] = (now + ttl_seconds, result)
+            return result
+        return wrapper
+    return decorator
+
+def invalidate_cache(prefix: str = ""):
+    """Clear cache entries matching a prefix (or all if empty)."""
+    keys_to_delete = [k for k in _cache if k.startswith(prefix)]
+    for k in keys_to_delete:
+        del _cache[k]
+```
+
+### File: `app/main.py` — Cache the list endpoint
+
+```python
+from app.cache import cached, invalidate_cache
+
+@cached(ttl_seconds=10)
+async def _get_all_todos(skip: int, limit: int):
+    """Cached query — separated so the decorator works cleanly."""
+    db = SessionLocal()
+    try:
+        return db.query(Todo).offset(skip).limit(limit).all()
+    finally:
+        db.close()
+
+@app.get("/todos")
+async def read_todos(skip: int = 0, limit: int = 100):
+    return await _get_all_todos(skip, limit)
+
+# Invalidate on writes
+@app.post("/todos", status_code=201)
+async def create_todo(todo: TodoCreate, db: Session = Depends(get_db)):
+    result = crud.create_todo(db, todo)
+    invalidate_cache("_get_all_todos")  # bust the cache
+    return result
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| TTL cache | Store result + expiry timestamp, return cached if not expired |
+| Cache key | Built from function name + arguments — same args = same cache |
+| Cache invalidation | Clear on writes so stale data isn't served |
+| Why in-memory is limited | Resets on restart, not shared across workers — production uses Redis |
+
+> **Production approach:** Use `redis` with `aioredis` for distributed caching, or HTTP-level caching with `Cache-Control` headers + CDN.
+
+---
+
+## Phase 16: Streaming Responses & Server-Sent Events (SSE)
+
+For long-running operations, stream results back instead of making the client wait.
+
+### File: `app/main.py` — Streaming
+
+```python
+from fastapi.responses import StreamingResponse
+import asyncio, json
+
+# Stream large data instead of loading all into memory
+@app.get("/todos/export")
+async def export_todos(db: Session = Depends(get_db)):
+    def generate():
+        todos = db.query(Todo).all()
+        yield "["
+        for i, todo in enumerate(todos):
+            if i > 0:
+                yield ","
+            yield json.dumps({
+                "id": todo.id,
+                "title": todo.title,
+                "completed": todo.completed,
+            })
+        yield "]"
+
+    return StreamingResponse(generate(), media_type="application/json")
+
+# Server-Sent Events — push updates to the client
+@app.get("/todos/stream")
+async def stream_todos():
+    async def event_generator():
+        while True:
+            # In production: listen to a message queue or DB change stream
+            yield f"data: {json.dumps({'time': time.time(), 'message': 'heartbeat'})}\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+### Try it yourself
+
+```bash
+# Streaming export
+curl http://127.0.0.1:8000/todos/export
+
+# SSE — watch events arrive every 2 seconds (Ctrl+C to stop)
+curl http://127.0.0.1:8000/todos/stream
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `StreamingResponse` | Send data in chunks — client receives data as it's generated |
+| Generator function | `yield` produces chunks one at a time, doesn't load everything into memory |
+| SSE format | `data: {...}\n\n` — the browser's `EventSource` API reads this natively |
+| When to stream | Large exports, real-time updates, progress indicators |
+
+---
+
+## Phase 17: Running with Multiple Workers & `lifespan`
+
+In production, Uvicorn runs multiple worker processes. This changes how startup/shutdown and shared state work.
+
+### File: `app/main.py` — Lifespan events
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # STARTUP — runs once per worker process
+    print("Starting up... creating tables")
+    Base.metadata.create_all(bind=engine)
+    yield
+    # SHUTDOWN — runs when worker stops
+    print("Shutting down... cleanup")
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### Running with workers
+
+```bash
+# Single worker (development) — what you've been using
+uvicorn app.main:app --reload
+
+# Multiple workers (production simulation)
+uvicorn app.main:app --workers 4
+
+# What happens with multiple workers:
+# - Each worker is a separate process with its own memory
+# - In-memory rate limiting / caching is PER WORKER (not shared!)
+# - Database connections are per-worker
+# - lifespan runs once per worker
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `lifespan` | Replaces deprecated `@app.on_event("startup")` / `@app.on_event("shutdown")` |
+| `@asynccontextmanager` | Code before `yield` = startup, after `yield` = shutdown |
+| `--workers 4` | Runs 4 separate processes — each with its own memory space |
+| Why Redis matters | In-memory state (cache, rate limits) isn't shared across workers |
+
+---
+
+## Phase 18: Concurrency Patterns — `asyncio.Semaphore` & Timeouts
+
+Control how many concurrent operations run and set time limits.
+
+### File: `app/main.py` — Bounded concurrency
+
+```python
+import asyncio
+import httpx
+
+# Limit concurrent external API calls (don't overwhelm downstream services)
+SEMAPHORE = asyncio.Semaphore(3)  # max 3 concurrent requests
+
+async def fetch_with_limit(client: httpx.AsyncClient, url: str):
+    async with SEMAPHORE:  # blocks if 3 are already running
+        response = await client.get(url)
+        return response.json()
+
+@app.get("/external/bounded")
+async def fetch_bounded():
+    urls = [f"https://httpbin.org/delay/1" for _ in range(10)]
+    async with httpx.AsyncClient() as client:
+        # 10 requests, but only 3 at a time
+        results = await asyncio.gather(
+            *[fetch_with_limit(client, url) for url in urls]
+        )
+    return {"fetched": len(results)}
+```
+
+### Timeouts — don't wait forever
+
+```python
+@app.get("/external/with-timeout")
+async def fetch_with_timeout():
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            # Also works at the asyncio level:
+            result = await asyncio.wait_for(
+                client.get("https://httpbin.org/delay/10"),
+                timeout=2.0,
+            )
+            return result.json()
+    except (httpx.TimeoutException, asyncio.TimeoutError):
+        raise HTTPException(status_code=504, detail="Upstream service timed out")
+```
+
+### `asyncio.gather` — error handling
+
+```python
+@app.get("/external/safe")
+async def fetch_safe():
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        results = await asyncio.gather(
+            client.get("https://httpbin.org/status/200"),
+            client.get("https://httpbin.org/status/500"),
+            client.get("https://httpbin.org/delay/10"),
+            return_exceptions=True,  # don't crash on failure, return the exception
+        )
+
+    successes = [r for r in results if not isinstance(r, Exception)]
+    failures = [str(r) for r in results if isinstance(r, Exception)]
+    return {"ok": len(successes), "failed": len(failures), "errors": failures}
+```
+
+### What you just learned:
+
+| Concept | Detail |
+|---------|--------|
+| `asyncio.Semaphore(n)` | Limits concurrency — at most `n` coroutines run the guarded block simultaneously |
+| `async with SEMAPHORE` | Acquires a slot, releases it when the block exits |
+| `asyncio.wait_for(coro, timeout)` | Raises `TimeoutError` if the coroutine doesn't finish in time |
+| `httpx.AsyncClient(timeout=)` | Client-level timeout — applies to all requests from this client |
+| `return_exceptions=True` | `gather` returns exceptions as values instead of raising — lets you handle partial failures |
+
+---
+
+## Updated Cheat Sheet: Concurrency & Optimization
+
+```
+Rate limiting?
+  ├─ Dev / single worker → in-memory sliding window
+  └─ Prod / multi-worker → Redis + slowapi
+
+Caching?
+  ├─ Dev / single worker → in-memory dict with TTL
+  ├─ Prod / multi-worker → Redis (aioredis)
+  └─ Static / public data → Cache-Control headers + CDN
+
+Dependencies?
+  ├─ Need the return value → param: Type = Depends(func)
+  ├─ Just a guard (auth) → dependencies=[Depends(func)]
+  └─ Shared across routes → app = FastAPI(dependencies=[...])
+
+Concurrent external calls?
+  ├─ Few calls → asyncio.gather()
+  ├─ Many calls → asyncio.Semaphore + gather
+  └─ Must not hang → asyncio.wait_for() or httpx timeout
+
+Streaming?
+  ├─ Large response → StreamingResponse + generator
+  └─ Real-time push → SSE (text/event-stream)
+
+Production deployment?
+  ├─ Multiple workers → uvicorn --workers N
+  ├─ Startup/shutdown → lifespan context manager
+  └─ In-memory state → moves to Redis (not shared across workers)
+```
+
+---
 ---
 
 # Part 3: React Fundamentals — Todo Frontend

@@ -5,7 +5,8 @@ from app.models import Base
 from app.schemas import TodoCreate, TodoUpdate, TodoResponse
 from app import crud
 
-Base.metadata.create_all(bind=engine)
+# alembic manages the SQL schema and models now.
+# Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Todo API")
 
