@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: users
+  namespace: graphql-federation
+  labels:
+    app: users
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: users
+  template:
+    metadata:
+      labels:
+        app: users
+    spec:
+      containers:
+        - name: users
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-federation-users:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: graphql-federation-config
+          env:
+            - name: USERS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-federation-secrets
+                  key: USERS_DATABASE_URL
+          volumeMounts:
+            - name: users-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: users-data
+          emptyDir: {}

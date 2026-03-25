@@ -1,6 +1,7 @@
 from typing import Optional
 
 import strawberry
+from strawberry.dataloader import DataLoader
 
 from app.database import SessionLocal
 from app.models import User
@@ -16,6 +17,19 @@ def to_user_type(user: User) -> "UserType":
     )
 
 
+async def load_users(ids: list[int]) -> list[Optional["UserType"]]:
+    db = SessionLocal()
+    try:
+        users = db.query(User).filter(User.id.in_(ids)).all()
+        user_map = {u.id: u for u in users}
+        return [to_user_type(user_map[uid]) if uid in user_map else None for uid in ids]
+    finally:
+        db.close()
+
+
+user_loader = DataLoader(load_fn=load_users)
+
+
 @strawberry.federation.type(keys=["id"])
 class UserType:
     id: int
@@ -25,15 +39,8 @@ class UserType:
     provider: str
 
     @classmethod
-    def resolve_reference(cls, id: int) -> Optional["UserType"]:
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.id == id).first()
-            if user is None:
-                return None
-            return to_user_type(user)
-        finally:
-            db.close()
+    async def resolve_reference(cls, id: int) -> Optional["UserType"]:
+        return await user_loader.load(id)
 
 
 @strawberry.input

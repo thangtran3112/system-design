@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: router
+  namespace: graphql-federation
+  labels:
+    app: router
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: router
+  template:
+    metadata:
+      labels:
+        app: router
+    spec:
+      containers:
+        - name: router
+          image: ghcr.io/apollographql/router:v2.0.0
+          args:
+            - --supergraph
+            - /etc/config/supergraph.graphql
+          ports:
+            - containerPort: 4000
+          volumeMounts:
+            - name: supergraph
+              mountPath: /etc/config/supergraph.graphql
+              subPath: supergraph.graphql
+          readinessProbe:
+            tcpSocket:
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+      volumes:
+        - name: supergraph
+          configMap:
+            name: router-supergraph

@@ -10,6 +10,11 @@ This project is split into:
 
 Read `LEARN-FEDERATION.md` for the step-by-step learning plan.
 
+For EKS deployment scaffolding, see:
+
+- `terraform-eks/` (cluster + ECR)
+- `k8s/` (subgraph/router manifests)
+
 ## Quick start
 
 1. Set up Python virtual environments:

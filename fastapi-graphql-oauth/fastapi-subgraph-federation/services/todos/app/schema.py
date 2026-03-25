@@ -10,6 +10,15 @@ from app.models import Todo
 class UserType:
     id: int
 
+    @strawberry.field
+    def todos(self, info: strawberry.types.Info) -> list["TodoType"]:
+        db = SessionLocal()
+        try:
+            todos = db.query(Todo).filter(Todo.owner_id == self.id).all()
+            return [to_todo_type(todo) for todo in todos]
+        finally:
+            db.close()
+
 
 @strawberry.federation.type
 class TodoType:
