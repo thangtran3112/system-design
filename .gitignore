@@ -1,3 +1,5 @@
 .DS_Store
 /fastapi-react-sql/app/__pycache__
 fastapi-react-sql/app/__pycache__/database_async.cpython-312.pyc
+*.pyc
+*.db
