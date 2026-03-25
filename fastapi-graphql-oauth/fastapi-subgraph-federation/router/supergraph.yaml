@@ -1,0 +1,10 @@
+federation_version: =2.11.0
+subgraphs:
+  users:
+    routing_url: http://localhost:8001/graphql
+    schema:
+      subgraph_url: http://localhost:8001/graphql
+  todos:
+    routing_url: http://localhost:8002/graphql
+    schema:
+      subgraph_url: http://localhost:8002/graphql
