@@ -1955,5 +1955,169 @@ git push ──────────▶ Actions workflow starts
                          └── rollout status ────▶ Waits for healthy Pods
                                                       │
                                                       ▼
-                                                 Users hit ALB → Pods serve traffic
+                                                  Users hit ALB → Pods serve traffic
 ```
+
+---
+
+## Part 9: Progressive Delivery + Operations Notes (EKS)
+
+---
+
+### Phase 35: Viewing Logs and Entering a Pod
+
+> In Kubernetes, you usually do **not** SSH/login to a Pod just to see logs.
+> You use `kubectl logs` directly.
+
+```bash
+# 1) List pods
+kubectl get pods -n graphql-todo
+
+# 2) View logs from one pod
+kubectl logs -n graphql-todo <pod-name>
+
+# 3) Follow logs in real time
+kubectl logs -n graphql-todo -f <pod-name>
+
+# 4) If pod has multiple containers
+kubectl logs -n graphql-todo <pod-name> -c <container-name>
+
+# 5) Previous container logs (after restart/crash)
+kubectl logs -n graphql-todo <pod-name> --previous
+```
+
+**Only for debugging internals (files/processes), enter the container shell:**
+
+```bash
+kubectl exec -it -n graphql-todo <pod-name> -- /bin/sh
+# or /bin/bash if your image includes bash
+```
+
+> For production, centralize logs to CloudWatch (for example via Fluent Bit) so
+> you can query logs across all Pods and restarts in one place.
+
+---
+
+### Phase 36: ECS CodeDeploy vs Kubernetes Blue/Green + Canary
+
+> In ECS, CodeDeploy provides blue/green and canary orchestration.
+> In Kubernetes, this is usually done by **controllers + traffic routing**.
+
+| ECS / CodeDeploy | Kubernetes / EKS Equivalent |
+|---|---|
+| Blue/Green deployment | Argo Rollouts BlueGreen strategy |
+| Canary deployment | Argo Rollouts Canary strategy |
+| Target group traffic shift | Ingress/service mesh weighted routing |
+| Deployment lifecycle hooks | Rollout steps, pauses, analysis |
+
+**What this means operationally:**
+
+- **Blue/Green**: Keep active and preview versions, then switch traffic when ready.
+- **Canary**: Shift traffic in percentages (for example 10% → 30% → 60% → 100%).
+- **Rollback**: Abort/pause promotion if health checks or metrics degrade.
+
+---
+
+### Phase 37: Do You Need to Install Argo and HPA?
+
+Short answer: **yes, some components must be installed.**
+
+- **HPA resource** is built into Kubernetes API, but needs metrics to function.
+- **Metrics Server** is required for CPU/memory autoscaling.
+- **Argo Rollouts** is not built into Kubernetes; install its controller.
+- **AWS Load Balancer Controller** is required for ALB Ingress traffic routing.
+
+```bash
+# Quick checks
+kubectl top nodes                              # verifies metrics pipeline
+kubectl get pods -n argo-rollouts             # verifies Argo controller
+kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
+```
+
+---
+
+### Phase 38: Install Argo Rollouts (Local Laptop)
+
+> Works for local clusters (kind, minikube, Docker Desktop Kubernetes).
+
+```bash
+# Install Argo Rollouts controller
+kubectl create namespace argo-rollouts
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+# Install kubectl plugin (Linux)
+curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+chmod +x kubectl-argo-rollouts-linux-amd64
+sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+# Verify
+kubectl argo rollouts version
+kubectl -n argo-rollouts get deploy
+```
+
+If HPA metrics are missing locally:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl top nodes
+```
+
+---
+
+### Phase 39: Install Argo Rollouts (AWS EKS)
+
+```bash
+# 1) Connect kubectl to EKS
+aws eks update-kubeconfig --region us-east-1 --name graphql-todo
+
+# 2) Install Argo Rollouts
+kubectl create namespace argo-rollouts
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+# 3) Verify
+kubectl -n argo-rollouts get pods
+kubectl argo rollouts version
+```
+
+> For EKS, also ensure:
+> - `metrics-server` is available (`kubectl top nodes` works)
+> - AWS Load Balancer Controller is installed for ALB Ingress routing
+
+---
+
+### Phase 40: Manifests in This Repository (Canary + Blue/Green + HPA)
+
+> This project now includes Argo Rollouts manifests under:
+
+```
+k8s/argo-rollouts/
+├── namespace.yaml
+├── configmap.yaml
+├── secrets.yaml
+├── canary/
+│   ├── services.yaml
+│   ├── ingress.yaml
+│   ├── rollout.yaml
+│   └── hpa.yaml
+└── bluegreen/
+    ├── services.yaml
+    ├── ingress.yaml
+    ├── rollout.yaml
+    └── hpa.yaml
+```
+
+**Apply order:**
+
+```bash
+# Shared resources first
+kubectl apply -f k8s/argo-rollouts/namespace.yaml
+kubectl apply -f k8s/argo-rollouts/configmap.yaml
+kubectl apply -f k8s/argo-rollouts/secrets.yaml
+
+# Then pick ONE strategy
+kubectl apply -f k8s/argo-rollouts/canary
+# or
+kubectl apply -f k8s/argo-rollouts/bluegreen
+```
+
+> Run either canary or blue/green for the same app at a time to avoid routing conflicts.

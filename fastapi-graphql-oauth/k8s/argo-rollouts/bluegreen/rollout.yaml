@@ -1,0 +1,73 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: graphql-todo-bluegreen
+  namespace: graphql-todo
+  labels:
+    app: graphql-todo
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: graphql-todo
+  template:
+    metadata:
+      labels:
+        app: graphql-todo
+    spec:
+      containers:
+        - name: graphql-todo
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: graphql-todo-config
+          env:
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: GOOGLE_CLIENT_ID
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: GOOGLE_CLIENT_SECRET
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: JWT_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+  strategy:
+    blueGreen:
+      activeService: graphql-todo-active
+      previewService: graphql-todo-preview
+      autoPromotionEnabled: false
+      previewReplicaCount: 1
+      scaleDownDelaySeconds: 30
