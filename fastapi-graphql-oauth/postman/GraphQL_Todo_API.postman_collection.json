@@ -1,0 +1,189 @@
+{
+	"info": {
+		"name": "GraphQL Todo API",
+		"description": "Postman collection for the FastAPI + Strawberry GraphQL Todo API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8000"
+		}
+	],
+	"item": [
+		{
+			"name": "Queries",
+			"item": [
+				{
+					"name": "Get All Todos",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "query GetAllTodos {\n  todos {\n    id\n    title\n    description\n    completed\n    owner {\n      id\n      name\n      email\n    }\n  }\n}",
+								"variables": ""
+							}
+						}
+					}
+				},
+				{
+					"name": "Get Todos by Owner",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "query GetTodosByOwner($ownerId: Int!) {\n  todos(ownerId: $ownerId) {\n    id\n    title\n    description\n    completed\n    owner {\n      name\n    }\n  }\n}",
+								"variables": "{\n  \"ownerId\": 1\n}"
+							}
+						}
+					}
+				},
+				{
+					"name": "Get Todo by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "query GetTodoById($id: Int!) {\n  todo(id: $id) {\n    id\n    title\n    description\n    completed\n    owner {\n      id\n      name\n      email\n      picture\n      provider\n    }\n  }\n}",
+								"variables": "{\n  \"id\": 1\n}"
+							}
+						}
+					}
+				},
+				{
+					"name": "Get All Users",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "query GetAllUsers {\n  users {\n    id\n    email\n    name\n    picture\n    provider\n  }\n}",
+								"variables": ""
+							}
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Mutations",
+			"item": [
+				{
+					"name": "Create Todo",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "mutation CreateTodo($input: CreateTodoInput!, $ownerId: Int!) {\n  createTodo(input: $input, ownerId: $ownerId) {\n    id\n    title\n    description\n    completed\n    owner {\n      id\n      name\n    }\n  }\n}",
+								"variables": "{\n  \"input\": {\n    \"title\": \"Learn GraphQL\",\n    \"description\": \"Study Strawberry + FastAPI\"\n  },\n  \"ownerId\": 1\n}"
+							}
+						}
+					}
+				},
+				{
+					"name": "Update Todo",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "mutation UpdateTodo($id: Int!, $input: UpdateTodoInput!) {\n  updateTodo(id: $id, input: $input) {\n    id\n    title\n    description\n    completed\n    owner {\n      name\n    }\n  }\n}",
+								"variables": "{\n  \"id\": 1,\n  \"input\": {\n    \"title\": \"Learn GraphQL (done!)\",\n    \"completed\": true\n  }\n}"
+							}
+						}
+					}
+				},
+				{
+					"name": "Delete Todo",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/graphql",
+							"host": ["{{baseUrl}}"],
+							"path": ["graphql"]
+						},
+						"body": {
+							"mode": "graphql",
+							"graphql": {
+								"query": "mutation DeleteTodo($id: Int!) {\n  deleteTodo(id: $id)\n}",
+								"variables": "{\n  \"id\": 1\n}"
+							}
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
