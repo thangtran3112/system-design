@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Response
+import base64
+import secrets
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 import httpx
 import jwt
@@ -130,3 +132,86 @@ def verify_app_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    
+@router.get("/cognito/login")
+def cognito_login():
+    """Redirect to Cognito's Hosted UI (which may show Google/Facebook buttons)."""
+    state = secrets.token_urlsafe(32)
+    cognito_url = (
+        f"https://{settings.cognito_domain}/oauth2/authorize"
+        f"?client_id={settings.cognito_client_id}"
+        f"&redirect_uri={settings.cognito_redirect_uri}"
+        "&response_type=code"
+        "&scope=openid email profile"
+        f"&state={state}"
+    )
+    response = RedirectResponse(url=cognito_url)
+    response.set_cookie("oauth_state", state, httponly=True, max_age=300)
+    return response
+
+@router.get("/cognito/callback")
+async def cognito_callback(code: str, state: str, request: Request):
+    # Verify state (same CSRF protection)
+    stored_state = request.cookies.get("oauth_state")
+    if not stored_state or stored_state != state:
+        raise HTTPException(status_code=400, detail="Invalid state")
+
+    # Exchange code for tokens — same pattern, different URLs
+    # Cognito requires Basic auth header: base64(client_id:client_secret)
+    credentials = base64.b64encode(
+        f"{settings.cognito_client_id}:{settings.cognito_client_secret}".encode()
+    ).decode()
+
+    async with httpx.AsyncClient() as client:
+        token_response = await client.post(
+            f"https://{settings.cognito_domain}/oauth2/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.cognito_redirect_uri,
+            },
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+
+    if token_response.status_code != 200:
+        raise HTTPException(status_code=400, detail="Failed to exchange code")
+
+    tokens = token_response.json()
+
+    # Cognito's id_token IS the user info (it's a JWT we can decode)
+    # No need for a separate userinfo API call (though Cognito has one)
+    id_token_payload = jwt.decode(
+        tokens["id_token"],
+        options={"verify_signature": False},  # In production: verify with Cognito's JWKS
+    )
+    # id_token_payload = {
+    #   "sub": "a1b2c3d4-xxxx-xxxx-xxxx",   ← Cognito user ID
+    #   "email": "user@gmail.com",
+    #   "name": "John Doe",
+    #   "cognito:username": "google_123456",
+    #   "iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxx"
+    # }
+
+    # Create/update user in our DB
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == id_token_payload["email"]).first()
+        if not user:
+            user = User(
+                email=id_token_payload["email"],
+                name=id_token_payload.get("name", ""),
+                picture=id_token_payload.get("picture"),
+                provider="cognito",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+    finally:
+        db.close()
+
+    # Issue our own app JWT (same as Google flow)
+    app_token = create_app_token(user_id=user.id, email=user.email)
+    return {"access_token": app_token, "user": {"id": user.id, "name": user.name}}

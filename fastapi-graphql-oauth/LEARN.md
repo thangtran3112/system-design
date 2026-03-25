@@ -987,6 +987,141 @@ def health():
 > - We control the payload (user_id, roles, permissions)
 > - Our backend only needs to verify our own secret, not call Google on every request
 
+**The redirect_uri is a BACKEND URL, not a frontend URL.**
+
+A common misconception is that Google "calls" your backend at the redirect URI. It doesn't.
+Google tells the **user's browser** to redirect there via an HTTP 302. The browser then makes
+a normal GET request to your backend:
+
+```
+User clicks "Allow" on Google's consent screen
+
+  Google responds to the BROWSER:
+  ┌──────────────────────────────────────────────────────────┐
+  │ HTTP 302                                                 │
+  │ Location: https://api.example.com/auth/google/callback   │
+  │           ?code=abc123                                   │
+  └──────────────────────────────────────────────────────────┘
+
+  The BROWSER follows the redirect:
+  ┌──────────────────────────────────────────────────────────┐
+  │ GET https://api.example.com/auth/google/callback         │
+  │     ?code=abc123                                         │
+  └──────────────────────────────────────────────────────────┘
+  This is a regular browser GET request hitting your @router.get("/google/callback")
+```
+
+> **Why must redirect_uri be a backend URL?**
+> The `?code=abc123` is a one-time authorization code that must be exchanged for tokens
+> using your `client_secret`. The secret lives on the server — never in the browser.
+> If the redirect went to the frontend, you'd have no safe way to exchange it.
+
+> **Why does `http://localhost:8000` work for local dev?**
+> Because Google doesn't call your server — your **browser** does the redirect.
+> Your browser can reach localhost, even though Google's servers can't.
+
+**Handling redirect_uri across environments:**
+
+The redirect_uri must match **exactly** what's registered in the Google Cloud Console.
+Each environment sets its own value via `.env` (or AWS Secrets Manager):
+
+```
+# .env for local
+GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
+
+# .env for dev
+GOOGLE_REDIRECT_URI=https://dev-api.example.com/auth/google/callback
+
+# .env for prod
+GOOGLE_REDIRECT_URI=https://api.example.com/auth/google/callback
+```
+
+In Google Cloud Console → Credentials → your OAuth client, register **all** of them:
+
+```
+Authorized redirect URIs:
+  http://localhost:8000/auth/google/callback
+  https://dev-api.example.com/auth/google/callback
+  https://qa-api.example.com/auth/google/callback
+  https://api.example.com/auth/google/callback
+```
+
+| Environment | `GOOGLE_REDIRECT_URI` (backend) | `FRONTEND_URL` (where to send user after) |
+|---|---|---|
+| Local | `http://localhost:8000/auth/google/callback` | `http://localhost:3000` |
+| Dev | `https://dev-api.example.com/auth/google/callback` | `https://dev.example.com` |
+| QA | `https://qa-api.example.com/auth/google/callback` | `https://qa.example.com` |
+| Prod | `https://api.example.com/auth/google/callback` | `https://example.com` |
+
+**The full picture with frontend redirect:**
+
+After the backend finishes the OAuth callback, it needs to send the user **back to the frontend**.
+The current code returns JSON, but in production you'd redirect:
+
+```python
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# Instead of returning JSON:
+# return {"access_token": app_token, "user": {...}}
+
+# Redirect to frontend with token:
+return RedirectResponse(url=f"{FRONTEND_URL}/auth/success?token={app_token}")
+```
+
+The complete flow across both backend and frontend:
+
+```
+  React Frontend                   FastAPI Backend                  Google
+  (localhost:3000)                 (localhost:8000)                 (accounts.google.com)
+       │                                │                                │
+       │ 1. Click "Login with Google"   │                                │
+       ├───────────────────────────────►│                                │
+       │    GET /auth/google/login      │                                │
+       │                                │                                │
+       │ 2. 302 Redirect               │                                │
+       │◄───────────────────────────────┤                                │
+       │    Location: google.com/...    │                                │
+       │                                │                                │
+       │ 3. Browser goes to Google      │                                │
+       ├────────────────────────────────┼───────────────────────────────►│
+       │                                │                          User logs in
+       │                                │                                │
+       │ 4. Google 302 redirects browser to redirect_uri                 │
+       │◄───────────────────────────────┼────────────────────────────────┤
+       │    Location: localhost:8000/auth/google/callback?code=abc123    │
+       │                                │                                │
+       │ 5. Browser follows redirect    │                                │
+       ├───────────────────────────────►│                                │
+       │    GET /callback?code=abc123   │                                │
+       │                                │ 6. Exchange code for tokens    │
+       │                                ├───────────────────────────────►│
+       │                                │    POST (server-to-server)     │
+       │                                │◄───────────────────────────────┤
+       │                                │    {access_token, id_token}    │
+       │                                │                                │
+       │                                │ 7. Get user info               │
+       │                                ├───────────────────────────────►│
+       │                                │◄───────────────────────────────┤
+       │                                │    {email, name, picture}      │
+       │                                │                                │
+       │ 8. Backend creates our JWT     │                                │
+       │    and redirects to frontend   │                                │
+       │◄───────────────────────────────┤                                │
+       │    302 → localhost:3000/auth/success?token=eyJ...               │
+       │                                │                                │
+       │ 9. Frontend stores JWT         │                                │
+       │    in localStorage/cookie      │                                │
+       │                                │                                │
+       │ 10. All future GraphQL requests include:                        │
+       ├───────────────────────────────►│    Authorization: Bearer eyJ.. │
+       │    POST /graphql               │                                │
+```
+
+> **Key takeaway**: The `redirect_uri` is always a backend URL. The frontend never
+> sends or knows it. Google doesn't call your server — the browser does the redirect.
+> Each environment configures its own URI via env vars, and every value must be
+> pre-registered in the Google Cloud Console.
+
 ---
 
 ### Phase 11: OAuth State Parameter — CSRF Protection
