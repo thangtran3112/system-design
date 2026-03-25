@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 import httpx
 import jwt
+from jwt import PyJWKClient
 from datetime import datetime, timedelta, timezone
 from app.config import settings
 from app.database import SessionLocal
@@ -181,11 +182,19 @@ async def cognito_callback(code: str, state: str, request: Request):
 
     tokens = token_response.json()
 
-    # Cognito's id_token IS the user info (it's a JWT we can decode)
-    # No need for a separate userinfo API call (though Cognito has one)
+    # Verify the Cognito id_token using public JWKS keys
+    jwks_url = (
+        f"https://cognito-idp.{settings.cognito_region}.amazonaws.com"
+        f"/{settings.cognito_user_pool_id}/.well-known/jwks.json"
+    )
+    jwk_client = PyJWKClient(jwks_url)
+    signing_key = jwk_client.get_signing_key_from_jwt(tokens["id_token"])
     id_token_payload = jwt.decode(
         tokens["id_token"],
-        options={"verify_signature": False},  # In production: verify with Cognito's JWKS
+        signing_key.key,
+        algorithms=["RS256"],
+        audience=settings.cognito_client_id,
+        issuer=f"https://cognito-idp.{settings.cognito_region}.amazonaws.com/{settings.cognito_user_pool_id}",
     )
     # id_token_payload = {
     #   "sub": "a1b2c3d4-xxxx-xxxx-xxxx",   ← Cognito user ID
@@ -215,3 +224,41 @@ async def cognito_callback(code: str, state: str, request: Request):
     # Issue our own app JWT (same as Google flow)
     app_token = create_app_token(user_id=user.id, email=user.email)
     return {"access_token": app_token, "user": {"id": user.id, "name": user.name}}
+
+@router.post("/auth/refresh")
+async def refresh_token(request: Request):
+    """Use a refresh token to get a new access token."""
+    body = await request.json()
+    refresh_token = body.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token required")
+
+    # Exchange refresh_token for new tokens
+    # Works with both Google and Cognito (different URLs, same pattern)
+    credentials = base64.b64encode(
+        f"{settings.cognito_client_id}:{settings.cognito_client_secret}".encode()
+    ).decode()
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://{settings.cognito_domain}/oauth2/token",
+            data={
+                "grant_type": "refresh_token",  # ← different grant_type
+                "refresh_token": refresh_token,
+            },
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Refresh failed — user must re-login")
+
+    tokens = response.json()
+    # Note: Cognito does NOT return a new refresh_token here.
+    # Google does. Behavior varies by provider.
+    return {
+        "access_token": tokens["access_token"],
+        "expires_in": tokens["expires_in"],
+    }

@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphql-todo
+  namespace: graphql-todo
+  labels:
+    app: graphql-todo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: graphql-todo
+  template:
+    metadata:
+      labels:
+        app: graphql-todo
+    spec:
+      containers:
+        - name: graphql-todo
+          # Replace with your ECR URL after terraform apply:
+          #   $(cd terraform-eks && terraform output -raw ecr_repository_url):latest
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:latest
+          ports:
+            - containerPort: 8000
+
+          # Non-sensitive env vars from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: graphql-todo-config
+
+          # Sensitive env vars from Secret
+          env:
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: GOOGLE_CLIENT_ID
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: GOOGLE_CLIENT_SECRET
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: JWT_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: graphql-todo-secrets
+                  key: DATABASE_URL
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30

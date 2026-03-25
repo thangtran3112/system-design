@@ -1686,203 +1686,619 @@ docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:latest
 
 ---
 
-### Phase 18: ECS Task Definition
+### Phase 18: Why Terraform Instead of AWS CLI
 
-Create **`ecs/task-definition.json`**:
+> The previous phases showed `aws` CLI commands. That works for learning, but in practice
+> you use **Infrastructure as Code (IaC)** — Terraform defines your entire stack in `.tf` files.
 
-```json
-{
-  "family": "graphql-todo",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
-  "containerDefinitions": [
-    {
-      "name": "graphql-todo",
-      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:latest",
-      "portMappings": [
-        {
-          "containerPort": 8000,
-          "protocol": "tcp"
-        }
-      ],
-      "environment": [
-        { "name": "GOOGLE_CLIENT_ID", "value": "your-client-id" }
-      ],
-      "secrets": [
-        {
-          "name": "GOOGLE_CLIENT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:google-oauth-secret"
-        },
-        {
-          "name": "JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:jwt-secret"
-        }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/graphql-todo",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "ecs"
-        }
-      },
-      "healthCheck": {
-        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
-        "interval": 30,
-        "timeout": 5,
-        "retries": 3
-      }
-    }
-  ]
+**AWS CLI vs Terraform:**
+
+```
+AWS CLI                              Terraform
+─────────────────────────────────    ─────────────────────────────────
+Imperative: "create this, then that" Declarative: "I want this state"
+No memory: doesn't track what exists Tracks state: knows what it created
+Hard to reproduce: run 20 commands   One command: terraform apply
+Hard to tear down: reverse each cmd  One command: terraform destroy
+No dependency management              Auto-resolves dependencies
+```
+
+> **Declarative** means you describe WHAT you want, not HOW to get there.
+> Terraform figures out the order: "ALB needs subnets → subnets need VPC → create VPC first."
+
+**Install Terraform:**
+
+```bash
+# macOS
+brew install terraform
+
+# Verify
+terraform version
+```
+
+---
+
+### Phase 19: Terraform Project Structure
+
+```
+terraform/
+├── main.tf                  # All resources (ECR, ECS, ALB, IAM, etc.)
+├── variables.tf             # Input variables (region, secrets, etc.)
+├── outputs.tf               # Values printed after apply (ALB URL, ECR URL)
+├── terraform.tfvars         # Your actual values (NEVER commit — in .gitignore)
+└── terraform.tfvars.example # Template showing required variables
+```
+
+> **`main.tf`** is the core file. In larger projects you'd split into
+> `ecr.tf`, `ecs.tf`, `alb.tf`, etc. — but one file is fine for learning.
+
+Create **`terraform/variables.tf`** — defines what inputs the config accepts:
+
+```hcl
+variable "aws_region" {
+  description = "AWS region for all resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name used for naming resources"
+  type        = string
+  default     = "graphql-todo"
+}
+
+variable "container_port" {
+  description = "Port the FastAPI container listens on"
+  type        = number
+  default     = 8000
+}
+
+variable "desired_count" {
+  description = "Number of ECS tasks to run"
+  type        = number
+  default     = 2
+}
+
+variable "cpu" {
+  description = "Fargate task CPU units (256 = 0.25 vCPU)"
+  type        = number
+  default     = 256
+}
+
+variable "memory" {
+  description = "Fargate task memory in MB"
+  type        = number
+  default     = 512
+}
+
+# Secrets — pass via terraform.tfvars or TF_VAR_ env vars
+# NEVER hardcode these
+
+variable "google_client_id" {
+  description = "Google OAuth client ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth client secret"
+  type        = string
+  sensitive   = true
+}
+
+variable "jwt_secret" {
+  description = "Secret key for signing app JWTs"
+  type        = string
+  sensitive   = true
+}
+
+variable "database_url" {
+  description = "PostgreSQL connection string for RDS"
+  type        = string
+  sensitive   = true
 }
 ```
 
-**What each field means:**
+> **`sensitive = true`** — Terraform won't print these values in logs or plan output.
+> You provide them via `terraform.tfvars` (gitignored) or `TF_VAR_jwt_secret` env vars.
 
-```
-family                — Name of the task definition (like a project name)
-networkMode: awsvpc   — Each task gets its own IP (required for Fargate)
-cpu: "256"            — 0.25 vCPU (smallest Fargate size). "1024" = 1 vCPU
-memory: "512"         — 512 MB RAM
-executionRoleArn      — IAM role that ECS uses to pull images from ECR
-                        and read secrets from Secrets Manager
+Create **`terraform/terraform.tfvars.example`** (commit this — it's a template):
 
-containerDefinitions:
-  image               — Your ECR image URI
-  portMappings        — Expose port 8000
+```hcl
+aws_region   = "us-east-1"
+project_name = "graphql-todo"
 
-  environment         — Plain text env vars (non-sensitive)
-  secrets             — Pulled from AWS Secrets Manager at runtime.
-                        NEVER put secrets in environment[].
-                        The container sees them as regular env vars.
-
-  logConfiguration    — Ship container logs to CloudWatch Logs
-  healthCheck         — ECS checks if the container is healthy
-                        Unhealthy containers get replaced
-```
-
-Register the task definition:
-```bash
-aws ecs register-task-definition --cli-input-json file://ecs/task-definition.json
+google_client_id     = "your-google-client-id.apps.googleusercontent.com"
+google_client_secret = "your-google-client-secret"
+jwt_secret           = "a-strong-random-secret-change-this"
+database_url         = "postgresql://user:password@your-rds-hostname:5432/graphql_todos"
 ```
 
 ---
 
-### Phase 19: Create ECS Cluster and Service
+### Phase 20: Terraform main.tf — The Full Stack
 
-```bash
-# 1. Create the cluster
-aws ecs create-cluster --cluster-name graphql-cluster
+Create **`terraform/main.tf`** — this one file creates everything:
 
-# 2. Create a CloudWatch log group
-aws logs create-log-group --log-group-name /ecs/graphql-todo
+```hcl
+terraform {
+  required_version = ">= 1.5"
 
-# 3. Store secrets in Secrets Manager
-aws secretsmanager create-secret --name google-oauth-secret \
-  --secret-string "your-google-client-secret"
-aws secretsmanager create-secret --name jwt-secret \
-  --secret-string "a-strong-random-secret"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
 
-# 4. Create the service (Fargate)
-aws ecs create-service \
-  --cluster graphql-cluster \
-  --service-name graphql-todo-service \
-  --task-definition graphql-todo \
-  --desired-count 2 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={
-    subnets=[subnet-xxxxx,subnet-yyyyy],
-    securityGroups=[sg-xxxxx],
-    assignPublicIp=ENABLED
-  }"
+provider "aws" {
+  region = var.aws_region
+}
 ```
 
-> **`desired-count: 2`** — Run 2 copies. If one crashes, traffic goes to the other
-> while ECS starts a replacement.
->
-> **`assignPublicIp: ENABLED`** — For learning. In production, put tasks in
-> private subnets behind an ALB.
->
-> You need to replace `subnet-xxxxx` and `sg-xxxxx` with your VPC's actual values.
-> Find them with: `aws ec2 describe-subnets` and `aws ec2 describe-security-groups`.
+> **`required_providers`** pins the AWS provider version. `~> 5.0` means "5.x but not 6.0".
+> This prevents surprise breakage when Terraform updates.
+
+**Step 1: Look up existing VPC/subnets (data sources)**
+
+```hcl
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+```
+
+> **`data` blocks** read existing resources. We use the default VPC for learning —
+> no need to create networking from scratch. In production, you'd create a custom VPC.
+
+**Step 2: ECR — Docker image registry**
+
+```hcl
+resource "aws_ecr_repository" "app" {
+  name                 = var.project_name
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true  # For learning — allows deleting repo with images
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+```
+
+> This replaces `aws ecr create-repository`. Terraform tracks it — `terraform destroy`
+> will delete it too. `scan_on_push` checks images for known CVEs.
+
+**Step 3: Secrets Manager**
+
+```hcl
+resource "aws_secretsmanager_secret" "google_client_secret" {
+  name = "${var.project_name}/google-client-secret"
+}
+
+resource "aws_secretsmanager_secret_version" "google_client_secret" {
+  secret_id     = aws_secretsmanager_secret.google_client_secret.id
+  secret_string = var.google_client_secret
+}
+
+resource "aws_secretsmanager_secret" "jwt_secret" {
+  name = "${var.project_name}/jwt-secret"
+}
+
+resource "aws_secretsmanager_secret_version" "jwt_secret" {
+  secret_id     = aws_secretsmanager_secret.jwt_secret.id
+  secret_string = var.jwt_secret
+}
+
+resource "aws_secretsmanager_secret" "database_url" {
+  name = "${var.project_name}/database-url"
+}
+
+resource "aws_secretsmanager_secret_version" "database_url" {
+  secret_id     = aws_secretsmanager_secret.database_url.id
+  secret_string = var.database_url
+}
+```
+
+> Two resources per secret: `aws_secretsmanager_secret` (the container) and
+> `aws_secretsmanager_secret_version` (the actual value). Separating them allows
+> rotating values without recreating the secret.
+
+**Step 4: CloudWatch Logs**
+
+```hcl
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${var.project_name}"
+  retention_in_days = 30
+}
+```
+
+**Step 5: IAM — ECS task execution role**
+
+```hcl
+resource "aws_iam_role" "ecs_task_execution" {
+  name = "${var.project_name}-ecs-execution"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# Base permissions: pull from ECR, write to CloudWatch
+resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# Additional: read our specific secrets
+resource "aws_iam_role_policy" "ecs_secrets" {
+  name = "${var.project_name}-secrets"
+  role = aws_iam_role.ecs_task_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
+      Resource = [
+        aws_secretsmanager_secret.google_client_secret.arn,
+        aws_secretsmanager_secret.jwt_secret.arn,
+        aws_secretsmanager_secret.database_url.arn,
+      ]
+    }]
+  })
+}
+```
+
+> **Why two policies?** `AmazonECSTaskExecutionRolePolicy` is a managed AWS policy
+> (ECR pull + CloudWatch). We add an inline policy for our specific secrets —
+> **least privilege**: the role can only read the 3 secrets it needs, not all secrets.
+
+**Step 6: Security Groups**
+
+```hcl
+# ALB: allow HTTP from internet
+resource "aws_security_group" "alb" {
+  name   = "${var.project_name}-alb"
+  vpc_id = data.aws_vpc.default.id
+
+  ingress {
+    protocol    = "tcp"
+    from_port   = 80
+    to_port     = 80
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ECS tasks: ONLY allow traffic from ALB (not from internet directly)
+resource "aws_security_group" "ecs_tasks" {
+  name   = "${var.project_name}-ecs-tasks"
+  vpc_id = data.aws_vpc.default.id
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = var.container_port
+    to_port         = var.container_port
+    security_groups = [aws_security_group.alb.id]  # ← only ALB can reach tasks
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+> **Key pattern**: Internet → ALB (open to `0.0.0.0/0`) → ECS tasks (only accepts from ALB SG).
+> Tasks are never directly exposed to the internet.
+
+**Step 7: ALB — Application Load Balancer**
+
+```hcl
+resource "aws_lb" "app" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = data.aws_subnets.default.ids
+}
+
+resource "aws_lb_target_group" "app" {
+  name        = "${var.project_name}-tg"
+  port        = var.container_port
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"  # Required for Fargate (awsvpc network mode)
+
+  health_check {
+    path                = "/health"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+    timeout             = 5
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.app.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}
+```
+
+> **`target_type = "ip"`** — Fargate tasks use `awsvpc` networking (each task gets
+> its own IP). The ALB routes to those IPs directly, not to EC2 instance IDs.
+
+**Step 8: ECS — Cluster, Task Definition, Service**
+
+```hcl
+resource "aws_ecs_cluster" "app" {
+  name = var.project_name
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = var.project_name
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.cpu
+  memory                   = var.memory
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name  = var.project_name
+    image = "${aws_ecr_repository.app.repository_url}:latest"
+
+    portMappings = [{
+      containerPort = var.container_port
+      protocol      = "tcp"
+    }]
+
+    # Non-sensitive env vars
+    environment = [
+      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
+      { name = "GOOGLE_REDIRECT_URI", value = "http://${aws_lb.app.dns_name}/auth/google/callback" },
+    ]
+
+    # Sensitive env vars — pulled from Secrets Manager at runtime
+    secrets = [
+      { name = "GOOGLE_CLIENT_SECRET", valueFrom = aws_secretsmanager_secret.google_client_secret.arn },
+      { name = "JWT_SECRET", valueFrom = aws_secretsmanager_secret.jwt_secret.arn },
+      { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.app.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl -f http://localhost:${var.container_port}/health || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 10
+    }
+  }])
+}
+
+resource "aws_ecs_service" "app" {
+  name            = var.project_name
+  cluster         = aws_ecs_cluster.app.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = var.desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = data.aws_subnets.default.ids
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    assign_public_ip = true  # For learning; production uses private subnets
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = var.project_name
+    container_port   = var.container_port
+  }
+
+  depends_on = [aws_lb_listener.http]
+}
+```
+
+> **`depends_on = [aws_lb_listener.http]`** — ECS service needs the ALB listener
+> to exist before it can register tasks. Terraform usually figures out dependencies
+> from resource references, but this one needs an explicit hint.
+
+> **Notice**: `GOOGLE_REDIRECT_URI` is set to the ALB DNS name automatically.
+> No more hardcoding `localhost:8000` — Terraform references `aws_lb.app.dns_name`.
+
+**Step 9: Outputs**
+
+Create **`terraform/outputs.tf`**:
+
+```hcl
+output "alb_dns_name" {
+  description = "ALB DNS name — your app's public URL"
+  value       = "http://${aws_lb.app.dns_name}"
+}
+
+output "ecr_repository_url" {
+  description = "ECR repo URL — push Docker images here"
+  value       = aws_ecr_repository.app.repository_url
+}
+
+output "ecs_cluster_name" {
+  description = "ECS cluster name"
+  value       = aws_ecs_cluster.app.name
+}
+
+output "ecs_service_name" {
+  description = "ECS service name"
+  value       = aws_ecs_service.app.name
+}
+```
+
+> After `terraform apply`, these values are printed. Use them for deployment scripts.
+
+**What Terraform creates (the full picture):**
+
+```
+terraform apply creates:
+─────────────────────────────────────────────────────────
+
+ECR Repository          ← where you push Docker images
+Secrets Manager (x3)    ← google_client_secret, jwt_secret, database_url
+CloudWatch Log Group    ← container logs
+IAM Role + Policies     ← permissions for ECS to pull images + read secrets
+Security Group (ALB)    ← allows HTTP from internet
+Security Group (ECS)    ← allows traffic from ALB only
+ALB + Target Group      ← load balancer + health checks
+ALB Listener            ← port 80 → forward to target group
+ECS Cluster             ← logical grouping
+ECS Task Definition     ← container recipe (image, CPU, env vars, secrets)
+ECS Service             ← keeps 2 tasks running, connected to ALB
+```
 
 ---
 
-### Phase 20: Add a Load Balancer
+### Phase 21: Deploy with Terraform
 
-In production, you don't expose tasks directly. You put an ALB in front:
+**Step 1: Initialize Terraform**
 
 ```bash
-# 1. Create ALB
-aws elbv2 create-load-balancer \
-  --name graphql-alb \
-  --subnets subnet-xxxxx subnet-yyyyy \
-  --security-groups sg-xxxxx
+cd terraform/
 
-# 2. Create target group (ECS tasks register here)
-aws elbv2 create-target-group \
-  --name graphql-targets \
-  --protocol HTTP \
-  --port 8000 \
-  --vpc-id vpc-xxxxx \
-  --target-type ip \
-  --health-check-path /health
+# Copy and fill in your values
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with real values
 
-# 3. Create listener (ALB listens on port 80, forwards to target group)
-aws elbv2 create-listener \
-  --load-balancer-arn arn:aws:elasticloadbalancing:... \
-  --protocol HTTP \
-  --port 80 \
-  --default-actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:...
+# Initialize — downloads the AWS provider
+terraform init
+```
 
-# 4. Update ECS service to use the ALB
+> `terraform init` downloads provider plugins into `.terraform/` (gitignored).
+> Run it once, or again after changing provider versions.
+
+**Step 2: Plan — preview what Terraform will create**
+
+```bash
+terraform plan
+```
+
+```
+Plan: 15 to add, 0 to change, 0 to destroy.
+
+Terraform shows exactly what it will create:
+  + aws_ecr_repository.app
+  + aws_ecs_cluster.app
+  + aws_ecs_service.app
+  + aws_ecs_task_definition.app
+  + aws_lb.app
+  ... etc
+```
+
+> **Always run `plan` before `apply`**. Read the output. Make sure it matches
+> what you expect. This is your safety net.
+
+**Step 3: Apply — create everything**
+
+```bash
+terraform apply
+# Type "yes" when prompted
+
+# After ~2 minutes:
+# Apply complete! Resources: 15 added, 0 changed, 0 destroyed.
+#
+# Outputs:
+#   alb_dns_name       = "http://graphql-todo-alb-123456.us-east-1.elb.amazonaws.com"
+#   ecr_repository_url = "123456789.dkr.ecr.us-east-1.amazonaws.com/graphql-todo"
+```
+
+**Step 4: Push your Docker image**
+
+```bash
+# Get ECR URL from terraform output
+ECR_URL=$(terraform output -raw ecr_repository_url)
+
+# Login Docker to ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin $ECR_URL
+
+# Build, tag, push
+docker build -t graphql-todo ..
+docker tag graphql-todo:latest $ECR_URL:latest
+docker push $ECR_URL:latest
+
+# Force ECS to pull the new image
 aws ecs update-service \
-  --cluster graphql-cluster \
-  --service graphql-todo-service \
-  --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:...,containerName=graphql-todo,containerPort=8000"
+  --cluster $(terraform output -raw ecs_cluster_name) \
+  --service $(terraform output -raw ecs_service_name) \
+  --force-new-deployment
 ```
 
-**Full architecture:**
+> Note: `docker build` uses `..` because we're in the `terraform/` directory.
+> The Dockerfile is one level up.
 
-```
-Internet → ALB (port 80/443) → Target Group → ECS Tasks (port 8000)
-                                                 ├── Task 1 (container)
-                                                 └── Task 2 (container)
-
-ALB handles:
-- Health checks (removes unhealthy tasks)
-- SSL/TLS termination (HTTPS at ALB, HTTP to tasks)
-- Load balancing across tasks
-```
-
----
-
-### Phase 21: Deploying Updates
-
-When you push code changes:
+**Step 5: Verify**
 
 ```bash
-# 1. Build new image
-docker build -t graphql-todo .
+# Get ALB URL
+echo $(terraform output -raw alb_dns_name)
 
-# 2. Tag with version (not just "latest")
-docker tag graphql-todo:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:v2
+# Test health endpoint
+curl http://graphql-todo-alb-123456.us-east-1.elb.amazonaws.com/health
+# {"status":"ok"}
 
-# 3. Push
-docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/graphql-todo:v2
+# Open GraphiQL in browser
+open "$(terraform output -raw alb_dns_name)/graphql"
+```
 
-# 4. Update task definition with new image tag
-# Edit task-definition.json: change image tag to :v2
-aws ecs register-task-definition --cli-input-json file://ecs/task-definition.json
+**Deploying updates (push new code):**
 
-# 5. Update service (triggers rolling deployment)
+```bash
+# 1. Build and push new image
+docker build -t graphql-todo ..
+docker tag graphql-todo:latest $ECR_URL:v2
+docker push $ECR_URL:v2
+
+# 2. Update the image tag in main.tf (change :latest to :v2)
+# Then:
+terraform apply
+
+# OR force redeploy with same tag:
 aws ecs update-service \
-  --cluster graphql-cluster \
-  --service graphql-todo-service \
-  --task-definition graphql-todo:2 \
+  --cluster $(terraform output -raw ecs_cluster_name) \
+  --service $(terraform output -raw ecs_service_name) \
   --force-new-deployment
 ```
 
@@ -1904,6 +2320,16 @@ ECS:
 5. Stops v1 tasks
 → Zero-downtime deployment
 ```
+
+**Tear down everything (when done learning):**
+
+```bash
+terraform destroy
+# Type "yes" — deletes ALL resources Terraform created
+```
+
+> This is the biggest win of Terraform. Those 15 resources created by `apply`?
+> One command deletes them all. No hunting for leftover AWS resources running up your bill.
 
 ---
 

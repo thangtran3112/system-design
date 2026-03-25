@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: graphql-todo-config
+  namespace: graphql-todo
+data:
+  GOOGLE_REDIRECT_URI: "http://localhost:8000/auth/google/callback"

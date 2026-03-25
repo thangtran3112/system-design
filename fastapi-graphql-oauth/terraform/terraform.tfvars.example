@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in real values
+# NEVER commit terraform.tfvars — it contains secrets
+
+aws_region   = "us-east-1"
+project_name = "graphql-todo"
+
+# OAuth
+google_client_id     = "your-google-client-id.apps.googleusercontent.com"
+google_client_secret = "your-google-client-secret"
+
+# App
+jwt_secret   = "a-strong-random-secret-change-this"
+database_url = "postgresql://user:password@your-rds-hostname:5432/graphql_todos"

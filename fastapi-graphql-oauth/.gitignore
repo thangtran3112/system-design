@@ -2,3 +2,13 @@
 *.db
 __pycache__/
 .venv/
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/terraform.tfvars
+terraform/.terraform.lock.hcl
+terraform-eks/.terraform/
+terraform-eks/*.tfstate
+terraform-eks/*.tfstate.backup
+terraform-eks/terraform.tfvars
+terraform-eks/.terraform.lock.hcl
