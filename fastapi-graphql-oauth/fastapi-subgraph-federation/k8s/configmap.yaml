@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: graphql-federation-config
-  namespace: graphql-federation
-data:
-  USERS_DATABASE_URL: "sqlite:////data/users.db"
-  TODOS_DATABASE_URL: "sqlite:////data/todos.db"

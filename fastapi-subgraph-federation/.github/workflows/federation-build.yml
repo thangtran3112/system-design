@@ -1,0 +1,92 @@
+name: federation-build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "fastapi-subgraph-federation/**"
+      - ".github/workflows/federation-build.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tag
+        id: meta
+        run: echo "image_tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push users image
+        env:
+          ECR_USERS_REPO: ${{ secrets.ECR_USERS_REPO }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          docker build -t "$ECR_USERS_REPO:$IMAGE_TAG" fastapi-subgraph-federation/services/users
+          docker push "$ECR_USERS_REPO:$IMAGE_TAG"
+
+      - name: Build and push todos image
+        env:
+          ECR_TODOS_REPO: ${{ secrets.ECR_TODOS_REPO }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          docker build -t "$ECR_TODOS_REPO:$IMAGE_TAG" fastapi-subgraph-federation/services/todos
+          docker push "$ECR_TODOS_REPO:$IMAGE_TAG"
+
+      - name: Build and push router image (optional)
+        env:
+          ECR_ROUTER_REPO: ${{ secrets.ECR_ROUTER_REPO }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          if [[ -n "$ECR_ROUTER_REPO" && -f "fastapi-subgraph-federation/router/Dockerfile" ]]; then
+            docker build -t "$ECR_ROUTER_REPO:$IMAGE_TAG" fastapi-subgraph-federation/router
+            docker push "$ECR_ROUTER_REPO:$IMAGE_TAG"
+          else
+            echo "Skipping router image build (no repo or no Dockerfile)."
+          fi
+
+      - name: Save deployment metadata
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+          ECR_USERS_REPO: ${{ secrets.ECR_USERS_REPO }}
+          ECR_TODOS_REPO: ${{ secrets.ECR_TODOS_REPO }}
+          ECR_ROUTER_REPO: ${{ secrets.ECR_ROUTER_REPO }}
+        run: |
+          mkdir -p /tmp/federation-metadata
+          cat > /tmp/federation-metadata/images.json <<EOF
+          {
+            "tag": "${IMAGE_TAG}",
+            "users": "${ECR_USERS_REPO}:${IMAGE_TAG}",
+            "todos": "${ECR_TODOS_REPO}:${IMAGE_TAG}",
+            "router": "${ECR_ROUTER_REPO}:${IMAGE_TAG}"
+          }
+          EOF
+
+      - name: Upload deployment metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: federation-images-${{ steps.meta.outputs.image_tag }}
+          path: /tmp/federation-metadata/images.json

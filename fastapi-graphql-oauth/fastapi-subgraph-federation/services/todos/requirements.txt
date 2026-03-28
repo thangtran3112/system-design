@@ -1,4 +1,0 @@
-fastapi==0.135.2
-uvicorn==0.42.0
-sqlalchemy==2.0.48
-strawberry-graphql[federation]==0.312.0

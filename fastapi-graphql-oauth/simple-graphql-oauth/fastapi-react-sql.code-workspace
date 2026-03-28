@@ -1,0 +1,14 @@
+{
+  "folders": [
+    {
+      "path": "../../fastapi-react-sql",
+    },
+    {
+      "path": "..",
+    },
+    {
+      "path": "../../fastapi-subgraph-federation",
+    },
+  ],
+  "settings": {},
+}
