@@ -1,0 +1,7 @@
+[tool.ariadne-codegen]
+schema_path = "graphql/client-schema.graphql"
+queries_path = "graphql/operations/"
+target_package_name = "supergraph_client"
+target_package_path = "tests/"
+client_name = "SupergraphClient"
+async_client = false

@@ -1,1 +1,3 @@
 pytest==9.0.2
+ariadne-codegen>=0.17
+httpx>=0.27

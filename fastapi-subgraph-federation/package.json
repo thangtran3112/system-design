@@ -1,0 +1,19 @@
+{
+  "name": "supergraph-sdk-codegen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Auto-generate typed SDK clients from the federated supergraph schema",
+  "scripts": {
+    "generate:ops": "node scripts/generate-operations.mjs",
+    "generate:ts": "graphql-codegen --config codegen.ts",
+    "generate": "npm run generate:ops && npm run generate:ts"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^5.0.0",
+    "@graphql-codegen/typescript": "^4.0.0",
+    "@graphql-codegen/typescript-operations": "^4.0.0",
+    "@graphql-codegen/typescript-generic-sdk": "^4.0.0",
+    "graphql": "^16.9.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,55 @@
+schema
+{
+  query: Query
+  mutation: Mutation
+}
+input CreateTodoInput
+{
+  title: String!
+  ownerId: Int!
+  description: String! = ""
+}
+input CreateUserInput
+{
+  email: String!
+  name: String!
+  picture: String = null
+  provider: String! = "local"
+}
+type Mutation
+{
+  createTodo(input: CreateTodoInput!): TodoType!
+  updateTodo(id: Int!, input: UpdateTodoInput!): TodoType
+  deleteTodo(id: Int!): Boolean!
+  createUser(input: CreateUserInput!): UserType!
+}
+type Query
+{
+  todos(ownerId: Int = null): [TodoType!]!
+  todo(id: Int!): TodoType
+  users: [UserType!]!
+  user(id: Int!): UserType
+}
+type TodoType
+{
+  id: Int!
+  title: String!
+  description: String!
+  completed: Boolean!
+  owner: UserType!
+}
+input UpdateTodoInput
+{
+  title: String = null
+  description: String = null
+  completed: Boolean = null
+}
+type UserType
+{
+  id: Int!
+  todos: [TodoType!]!
+  email: String!
+  name: String!
+  picture: String
+  provider: String!
+}
