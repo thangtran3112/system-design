@@ -12,10 +12,23 @@ if [ ! -f "${SUPERGRAPH}" ]; then
   exit 1
 fi
 
-# Strip Apollo Federation directives to produce a client-facing schema
-python scripts/strip_federation.py "${SUPERGRAPH}" > "${CLIENT_SCHEMA}"
-printf "Stripped federation directives → %s\n" "${CLIENT_SCHEMA}"
+# Step 1: Strip Apollo Federation directives → clean client schema
+printf "=== Step 1: Strip federation directives ===\n"
+python3 scripts/strip_federation.py "${SUPERGRAPH}" > "${CLIENT_SCHEMA}"
+printf "  -> %s\n" "${CLIENT_SCHEMA}"
 
-# Generate the typed Python client
-ariadne-codegen
-printf "Generated SDK client → tests/supergraph_client/\n"
+# Step 2: Auto-generate .graphql operation files from schema
+printf "\n=== Step 2: Generate GraphQL operations ===\n"
+node scripts/generate-operations.mjs
+
+# Step 3: Generate TypeScript SDK (graphql-codegen)
+printf "\n=== Step 3: Generate TypeScript SDK ===\n"
+npx graphql-codegen --config codegen.ts
+printf "  -> generated/typescript/sdk.ts\n"
+
+# Step 4: Generate Python SDK (ariadne-codegen)
+printf "\n=== Step 4: Generate Python SDK ===\n"
+.venv/bin/ariadne-codegen
+printf "  -> tests/supergraph_client/\n"
+
+printf "\n✓ All SDK clients generated successfully.\n"
